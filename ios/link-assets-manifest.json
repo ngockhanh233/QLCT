@@ -1,0 +1,13 @@
+{
+  "migIndex": 1,
+  "data": [
+    {
+      "path": "src/assets/fonts/Roboto/Roboto-Bold.ttf",
+      "sha1": "47327df0f35e7cd7c8645874897a7449697544ae"
+    },
+    {
+      "path": "src/assets/fonts/Roboto/Roboto-Medium.ttf",
+      "sha1": "6060ca726b9760b76f7c347dce9d2fa1fe42ec92"
+    }
+  ]
+}

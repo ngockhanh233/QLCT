@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "694988244061",
+    "project_id": "qlct-68ef9",
+    "storage_bucket": "qlct-68ef9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:694988244061:android:769a46fdb9404086a579b4",
+        "android_client_info": {
+          "package_name": "com.qlct"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "694988244061-0q63bc1j6gomvoc25aspma3chjtj7q71.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.qlct",
+            "certificate_hash": "5e8f16062ea3cd2c4a0d547876baa6f38cabf625"
+          }
+        },
+        {
+          "client_id": "694988244061-ciqpp9s030j9iag6ghoaqg5agqkltghc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhqCnGYR1Fd5jCtjQM7JWKr-rmt0eny2M"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "694988244061-ciqpp9s030j9iag6ghoaqg5agqkltghc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
