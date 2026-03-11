@@ -1,10 +1,20 @@
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
 import LinearGradient from 'react-native-linear-gradient';
+import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../../../../../utils/color';
-import ChevronDownIcon from '../../../../../../assets/icons/ChevronDownIcon';
+// import ChevronDownIcon from '../../../../../../assets/icons/ChevronDownIcon';
 import AddIcon from '../../../../../../assets/icons/AddIcon';
 import BudgetIcon from '../../../../../../assets/icons/BudgetIcon';
 import WalletIcon from '../../../../../../assets/icons/WalletIcon';
+import BellIcon from '../../../../../../assets/icons/BellIcon';
+import { getStoredUser } from '../../../../../../services';
+import {
+  getBalanceNotificationsUnreadCount,
+  subscribeBalanceNotifications,
+  setBalanceNotificationsUnreadCount,
+} from '../../../../../../services/balanceNotifications';
+import React, { useEffect, useRef, useState } from 'react';
+import PiggyBankIcon from '../../../../../../assets/icons/PiggyBankIcon';
 
 function formatMoney(amount: number): string {
   return `${amount.toLocaleString('vi-VN')}đ`;
@@ -32,26 +42,87 @@ const HeaderSection = ({
   onQuickAdd,
   onViewDetailStats,
   onManageFund,
-}: HeaderSectionProps) => (
-  <View style={[styles.container, { paddingTop }]}>
-    {/* User Info */}
-    <View style={styles.userInfo}>
-      {photoURL ? (
-        <Image source={{ uri: photoURL }} style={styles.avatar} />
-      ) : (
-        <Image
-          source={require('../../../../../../assets/img/logo.png')}
-          style={styles.avatar}
-        />
-      )}
-      <View style={styles.userText}>
-        <Text style={styles.greeting}>Xin chào,</Text>
-        <View style={styles.nameRow}>
-          <Text style={styles.userName}>{displayName || 'Bạn'}</Text>
-          {/* <ChevronDownIcon width={16} height={16} color={colors.text} /> */}
+}: HeaderSectionProps) => {
+  const navigation = useNavigation<any>();
+  const [unreadCount, setUnreadCount] = useState(0);
+  const userIdRef = useRef<string>('');
+
+  useEffect(() => {
+    let unsub: (() => void) | null = null;
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const stored = await getStoredUser();
+        const uid = stored?.uid ?? '';
+        userIdRef.current = uid;
+        if (!uid) return;
+
+        const cachedUnread = await getBalanceNotificationsUnreadCount(uid);
+        if (!cancelled) setUnreadCount(cachedUnread);
+
+        // Realtime update badge if có thông báo mới (kể cả từ nơi khác).
+        unsub = subscribeBalanceNotifications(uid, async (items) => {
+          const unread = items.filter((it) => !it.isRead).length;
+          if (!cancelled) setUnreadCount(unread);
+          try {
+            await setBalanceNotificationsUnreadCount(uid, unread);
+          } catch {
+            // ignore
+          }
+        });
+      } catch {
+        // ignore
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, []);
+
+  const handleOpenNotifications = () => {
+    (navigation.getParent() as { navigate: (name: 'Notifications') => void } | undefined)?.navigate('Notifications');
+  };
+
+  return (
+    <View style={[styles.container, { paddingTop }]}>
+      {/* User Info */}
+      <View style={styles.userInfo}>
+        <View style={styles.userLeft}>
+          {photoURL ? (
+            <Image source={{ uri: photoURL }} style={styles.avatar} />
+          ) : (
+            <Image
+              source={require('../../../../../../assets/img/logo.png')}
+              style={styles.avatar}
+            />
+          )}
+          <View style={styles.userText}>
+            <Text style={styles.greeting}>Xin chào,</Text>
+            <View style={styles.nameRow}>
+              <Text style={styles.userName}>{displayName || 'Bạn'}</Text>
+              {/* <ChevronDownIcon width={16} height={16} color={colors.text} /> */}
+            </View>
+          </View>
         </View>
+
+        <TouchableOpacity
+          style={styles.notifyButton}
+          activeOpacity={0.75}
+          onPress={handleOpenNotifications}
+        >
+          <BellIcon width={20} height={20} color={colors.text} />
+          {unreadCount > 0 && (
+            <View style={styles.notifyBadge}>
+              <Text style={styles.notifyBadgeText}>
+                {unreadCount > 99 ? '99+' : String(unreadCount)}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
-    </View>
 
     {/* Balance Card - Visa Style */}
     <LinearGradient
@@ -65,16 +136,16 @@ const HeaderSection = ({
       <View style={styles.cardPattern} />
 
       <View style={styles.cardContent}>
-        <Text style={styles.balanceLabel}>Tiền dư tháng này</Text>
+        <Text style={styles.balanceLabel}>Số dư còn lại</Text>
         <Text style={styles.balanceAmount}>{formatMoney(balance)}</Text>
 
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
-            <Text style={styles.statLabel}>TỔNG THU</Text>
+            <Text style={styles.statLabel}>TỔNG THU THÁNG</Text>
             <Text style={styles.statAmount}>{formatMoney(totalIncome)}</Text>
           </View>
           <View style={styles.statItem}>
-            <Text style={styles.statLabel}>TỔNG CHI</Text>
+            <Text style={styles.statLabel}>TỔNG CHI THÁNG</Text>
             <Text style={styles.statAmountExpense}>{formatMoney(totalExpense)}</Text>
           </View>
         </View>
@@ -111,13 +182,15 @@ const HeaderSection = ({
         onPress={onManageFund}
       >
         <View style={[styles.actionIconWrap, { backgroundColor: '#22C55E' }]}>
-          <WalletIcon width={18} height={18} color={colors.white} />
+          {/* <WalletIcon width={18} height={18} color={colors.white} /> */}
+          <PiggyBankIcon width={18} height={18} color={colors.white} />
         </View>
         <Text style={styles.actionLabel}>Quản lý Quỹ</Text>
       </TouchableOpacity>
     </View>
-  </View>
-);
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
   container: {
@@ -128,6 +201,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 24,
+    justifyContent: 'space-between',
+  },
+  userLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    paddingRight: 12,
   },
   avatar: {
     width: 48,
@@ -151,6 +231,36 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: colors.text,
     marginRight: 4,
+  },
+  notifyButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  notifyBadge: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    paddingHorizontal: 5,
+    backgroundColor: colors.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.white,
+  },
+  notifyBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.white,
   },
   balanceCard: {
     borderRadius: 20,

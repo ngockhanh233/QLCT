@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  SalaryIcon,
   BonusIcon,
   AllowanceIcon,
   FreelanceIcon,
@@ -7,6 +8,7 @@ import {
   InterestIcon,
   DividendIcon,
   RentalIcon,
+  PensionIcon,
   SellIcon,
   RefundIcon,
   OtherIncomeIcon,
@@ -28,6 +30,20 @@ export interface IncomeCategory {
 }
 
 export const INCOME_CATEGORIES: IncomeCategory[] = [
+  // Hay dùng
+  {
+    id: 'salary',
+    name: 'Lương',
+    icon: SalaryIcon,
+    color: '#4CAF50',
+  },
+  {
+    id: 'pension',
+    name: 'Lương hưu',
+    icon: PensionIcon,
+    color: '#FF5722',
+  },
+
   // Thưởng & Phúc lợi
   {
     id: 'bonus',
@@ -123,7 +139,9 @@ export const getIncomeCategoryById = (id: string): IncomeCategory | undefined =>
 
 export const getIncomeCategoriesByGroup = () => {
   return {
-    bonus: INCOME_CATEGORIES.filter(c => ['bonus', 'allowance'].includes(c.id)),
+    bonus: INCOME_CATEGORIES.filter(c =>
+      ['salary', 'pension', 'bonus', 'allowance'].includes(c.id),
+    ),
     business: INCOME_CATEGORIES.filter(c => ['sell', 'freelance'].includes(c.id)),
     liquidation: INCOME_CATEGORIES.filter(c => ['liquidation', 'refund'].includes(c.id)),
     investment: INCOME_CATEGORIES.filter(c => ['investment', 'interest', 'dividend'].includes(c.id)),

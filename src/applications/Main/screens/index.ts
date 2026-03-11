@@ -1,7 +1,10 @@
 export { HomeScreen } from './Home';
 export { TransactionScreen } from './Transaction';
 export { AddScreen } from './Add';
-export { BudgetScreen } from './Budget';
 export { ProfileScreen } from './Profile';
 export { AddTransactionScreen } from './AddTransaction';
 export { default as FinanceReportScreen } from './FinanceReport/FinanceReportScreen';
+export { FundManagementScreen } from './FundManagement';
+export { NotificationsScreen } from './Notifications';
+export { DefaultFundSetupScreen } from './DefaultFundSetup';
+export { default as IncomeSourcesScreen } from './IncomeSources/IncomeSourcesScreen';

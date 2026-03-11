@@ -8,13 +8,6 @@ import {
   IncomeCategory,
   getIncomeCategoryById,
 } from '../constants/IncomeCategoryConstants';
-import {
-  FIXED_INCOME_CATEGORIES,
-  FIXED_EXPENSE_CATEGORIES,
-  FixedCategory,
-  getFixedIncomeCategoryById,
-  getFixedExpenseCategoryById,
-} from '../constants/FixedCategoryConstants';
 import { OtherIcon, OtherIncomeIcon } from '../assets/icons/categories';
 
 export type CategoryType = 'income' | 'expense' | 'fixed_income' | 'fixed_expense';
@@ -41,7 +34,7 @@ const DEFAULT_INCOME_CATEGORY: CategoryInfo = {
 };
 
 export const getCategoryInfo = (categoryId: string, type: CategoryType): CategoryInfo => {
-  let category: ExpenditureCategory | IncomeCategory | FixedCategory | undefined;
+  let category: ExpenditureCategory | IncomeCategory | undefined;
 
   switch (type) {
     case 'income':
@@ -53,11 +46,13 @@ export const getCategoryInfo = (categoryId: string, type: CategoryType): Categor
       return category || DEFAULT_EXPENSE_CATEGORY;
 
     case 'fixed_income':
-      category = getFixedIncomeCategoryById(categoryId);
+      // Backward-compatible alias (đã bỏ fixed categories riêng)
+      category = getIncomeCategoryById(categoryId);
       return category || DEFAULT_INCOME_CATEGORY;
 
     case 'fixed_expense':
-      category = getFixedExpenseCategoryById(categoryId);
+      // Backward-compatible alias (đã bỏ fixed categories riêng)
+      category = getExpenseCategoryById(categoryId);
       return category || DEFAULT_EXPENSE_CATEGORY;
 
     default:
@@ -72,9 +67,9 @@ export const getAllCategories = (type: CategoryType): CategoryInfo[] => {
     case 'expense':
       return EXPENDITURE_CATEGORIES;
     case 'fixed_income':
-      return FIXED_INCOME_CATEGORIES;
+      return INCOME_CATEGORIES;
     case 'fixed_expense':
-      return FIXED_EXPENSE_CATEGORIES;
+      return EXPENDITURE_CATEGORIES;
     default:
       return [];
   }

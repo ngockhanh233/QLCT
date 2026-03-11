@@ -23,6 +23,7 @@ interface CurrencyInputProps {
   labelStyle?: TextStyle;
   suffixStyle?: TextStyle;
   showSuggestions?: boolean;
+  editable?: boolean;
 }
 
 const CurrencyInput: React.FC<CurrencyInputProps> = ({
@@ -37,6 +38,7 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({
   labelStyle,
   suffixStyle,
   showSuggestions = true,
+  editable = true,
 }) => {
   const [displayValue, setDisplayValue] = useState('');
   const [isFocused, setIsFocused] = useState(false);
@@ -47,7 +49,7 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({
     } else {
       setDisplayValue('');
     }
-  }, []);
+  }, [value]);
 
   const formatNumber = (num: number): string => {
     return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
@@ -101,7 +103,7 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({
     <View style={[styles.container, containerStyle]}>
       {label && <Text style={[styles.label, labelStyle]}>{label}</Text>}
       
-      <View style={[styles.inputWrapper, inputWrapperStyle]}>
+      <View style={[styles.inputWrapper, !editable && styles.inputWrapperDisabled, inputWrapperStyle]}>
         <TextInput
           style={[styles.input, inputStyle]}
           placeholder={placeholder}
@@ -109,6 +111,7 @@ const CurrencyInput: React.FC<CurrencyInputProps> = ({
           keyboardType="numeric"
           value={displayValue}
           onChangeText={handleChangeText}
+          editable={editable}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setTimeout(() => setIsFocused(false), 150)}
         />
@@ -157,6 +160,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.inputBackground,
     borderRadius: 12,
     paddingHorizontal: 16,
+  },
+  inputWrapperDisabled: {
+    opacity: 0.6,
   },
   input: {
     flex: 1,

@@ -6,13 +6,13 @@ import {
   HomeScreen,
   TransactionScreen,
   AddScreen,
-  BudgetScreen,
+  FundManagementScreen,
   ProfileScreen,
 } from './screens';
 import HomeIcon from '../../assets/icons/WalletIcon';
 import TransactionIcon from '../../assets/icons/TransactionIcon';
 import AddIcon from '../../assets/icons/AddIcon';
-import MoneyIcon from '../../assets/icons/BudgetIcon';
+import PiggyBankIcon from '../../assets/icons/PiggyBankIcon';
 import ProfileIcon from '../../assets/icons/UserIcon';
 import { colors } from '../../utils/color';
 import { RootStackParamList } from './MainScreen';
@@ -106,11 +106,12 @@ const BottomTabNavigator: React.FC<BottomTabNavigatorProps> = ({ onLogout }) => 
       />
       <Tab.Screen
         name="Budget"
-        component={BudgetScreen}
+        // NOTE: Tạm thời dùng tab này để mở màn Quỹ.
+        component={FundManagementScreen}
         options={{
-          tabBarLabel: 'Cố định',
+          tabBarLabel: 'Quỹ',
           tabBarIcon: ({ color }) => (
-            <MoneyIcon width={22} height={22} color={color} />
+            <PiggyBankIcon width={22} height={22} color={color} />
           ),
         }}
       />

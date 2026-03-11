@@ -5,3 +5,4 @@ export { default as ConfirmProvider } from './ConfirmDialog/ConfirmProvider';
 export { default as SnackbarProvider } from './Snackbar/SnackbarProvider';
 export { default as Skeleton } from './Skeleton/Skeleton';
 export { default as MonthPicker } from './MonthPicker/MonthPicker';
+export { default as ErrorPopup } from './ErrorPopup';

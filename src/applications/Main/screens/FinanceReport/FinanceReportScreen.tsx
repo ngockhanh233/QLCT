@@ -12,7 +12,6 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
-  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -31,7 +30,7 @@ import {
 import { colors } from '../../../../utils/color';
 import { getStoredUser } from '../../../../services';
 import type { MonthSummary } from '../Home/hooks';
-import { useFixedItems } from '../Budget/hooks';
+import { useFunds } from '../FundManagement/hooks/useFunds';
 import { SpendingDistributionSection } from '../Home/components';
 import RNFS from 'react-native-fs';
 import XLSX from 'xlsx';
@@ -39,10 +38,10 @@ import Svg, { Polyline, Circle, Text as SvgText } from 'react-native-svg';
 import WalletIcon from '../../../../assets/icons/WalletIcon';
 import IncomeIcon from '../../../../assets/icons/IncomeIcon';
 import ExpenseIcon from '../../../../assets/icons/ExpenseIcon';
-import { getFixedIncomeCategory, getFixedExpenseCategory } from '../../../../utils/categoryUtils';
-import { TRANSACTION_TYPES } from '../../../../constants';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../MainScreen';
+import { MonthPicker, ErrorPopup } from '../../../../components';
+import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 
 const COLLECTION_NAME = 'transactions';
 const MAX_ITEMS = 1000;
@@ -245,12 +244,7 @@ const FinanceReportScreen: React.FC = () => {
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
-  const {
-    getTotalFixedIncomeByMonth,
-    getTotalFixedExpenseByMonth,
-    fetchFixedTotalsForMonth,
-    getFixedItemsByMonth,
-  } = useFixedItems();
+  const { funds } = useFunds();
 
   const [userId, setUserId] = useState<string | null>(null);
   const [selectedMonthDate, setSelectedMonthDate] = useState<Date>(
@@ -276,19 +270,19 @@ const FinanceReportScreen: React.FC = () => {
   const [exportedFilePath, setExportedFilePath] = useState<string | null>(null);
   const [exportedFileName, setExportedFileName] = useState<string | null>(null);
 
-  // Cache thu/chi cố định theo tháng (chỉ fetch từ Firestore khi xem tháng khác tháng hiện tại)
-  const [fixedTotalsCache, setFixedTotalsCache] = useState<
-    Record<string, { income: number; expense: number }>
-  >({});
-
-  const [fixedDetailVisible, setFixedDetailVisible] = useState(false);
-  const [fixedDetailType, setFixedDetailType] = useState<'income' | 'expense'>(
-    'expense',
+  const [monthPickerVisible, setMonthPickerVisible] = useState(false);
+  const [monthPickerYear, setMonthPickerYear] = useState(
+    () => new Date().getFullYear(),
   );
-  const fixedModalScrollRef = useRef<ScrollView | null>(null);
-  const [fixedModalScrollOffset, setFixedModalScrollOffset] = useState(0);
-  const [fixedModalContentHeight, setFixedModalContentHeight] = useState(0);
-  const [fixedModalLayoutHeight, setFixedModalLayoutHeight] = useState(0);
+  const [errorPopupVisible, setErrorPopupVisible] = useState(false);
+  const [errorPopupTitle, setErrorPopupTitle] = useState('Lỗi');
+  const [errorPopupMessage, setErrorPopupMessage] = useState('');
+
+  const showError = useCallback((title: string, message: string) => {
+    setErrorPopupTitle(title);
+    setErrorPopupMessage(message);
+    setErrorPopupVisible(true);
+  }, []);
 
   const handleCategoryDetail = useCallback(
     (categoryId: string) => {
@@ -392,93 +386,18 @@ const FinanceReportScreen: React.FC = () => {
     loadYearSummary();
   }, [loadSelectedMonth, loadPrevMonth, loadYearSummary]);
 
-  const monthKey = useMemo(
-    () => getMonthKeyFromDate(selectedMonthDate),
-    [selectedMonthDate],
-  );
-  const currentMonthKey = getMonthKeyFromDate(new Date());
-  const prevMonthKey = useMemo(() => {
-    const d = new Date(
-      selectedMonthDate.getFullYear(),
-      selectedMonthDate.getMonth() - 1,
-      1,
-    );
-    return getMonthKeyFromDate(d);
-  }, [selectedMonthDate]);
-
-  // Fetch thu/chi cố định từ Firestore khi xem tháng khác tháng hiện tại
-  useEffect(() => {
-    if (!userId) return;
-    const keysToLoad: string[] = [];
-    if (monthKey !== currentMonthKey && !fixedTotalsCache[monthKey]) {
-      keysToLoad.push(monthKey);
-    }
-    if (
-      prevMonthKey !== currentMonthKey &&
-      prevMonthKey !== monthKey &&
-      !fixedTotalsCache[prevMonthKey]
-    ) {
-      keysToLoad.push(prevMonthKey);
-    }
-    if (keysToLoad.length === 0) return;
-    let cancelled = false;
-    keysToLoad.forEach(async key => {
-      const result = await fetchFixedTotalsForMonth(key);
-      if (!cancelled) {
-        setFixedTotalsCache(prev => ({ ...prev, [key]: result }));
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    userId,
-    monthKey,
-    prevMonthKey,
-    currentMonthKey,
-    fetchFixedTotalsForMonth,
-    fixedTotalsCache,
-  ]);
-
-  const fixedIncomeTotal =
-    monthKey === currentMonthKey
-      ? getTotalFixedIncomeByMonth(monthKey)
-      : (fixedTotalsCache[monthKey]?.income ?? 0);
-  const fixedExpenseTotal =
-    monthKey === currentMonthKey
-      ? getTotalFixedExpenseByMonth(monthKey)
-      : (fixedTotalsCache[monthKey]?.expense ?? 0);
-
   const totalIncome = monthSummary.totalIncome;
   const totalExpense = monthSummary.totalExpense;
   const expenseByCategory = monthSummary.expenseByCategory;
 
-  const totalIncomeWithFixed = totalIncome + fixedIncomeTotal;
-  const totalExpenseWithFixed = totalExpense + fixedExpenseTotal;
-  const balance = totalIncomeWithFixed - totalExpenseWithFixed;
+  const netForSelectedMonth = totalIncome - totalExpense;
+  const totalFundBalance = useMemo(
+    () => funds.reduce((sum, f) => sum + ((f.balance as number) ?? 0), 0),
+    [funds],
+  );
 
   const prevIncome = prevMonthSummary?.totalIncome ?? 0;
   const prevExpense = prevMonthSummary?.totalExpense ?? 0;
-
-  const prevFixedIncomeTotal =
-    prevMonthKey === currentMonthKey
-      ? getTotalFixedIncomeByMonth(prevMonthKey)
-      : (fixedTotalsCache[prevMonthKey]?.income ?? 0);
-  const prevFixedExpenseTotal =
-    prevMonthKey === currentMonthKey
-      ? getTotalFixedExpenseByMonth(prevMonthKey)
-      : (fixedTotalsCache[prevMonthKey]?.expense ?? 0);
-
-  const fixedItemsForSelectedMonth = useMemo(() => {
-    const items =
-      fixedDetailType === 'income'
-        ? getFixedItemsByMonth(monthKey, TRANSACTION_TYPES.INCOME)
-        : getFixedItemsByMonth(monthKey, TRANSACTION_TYPES.EXPENSE);
-    return items;
-  }, [fixedDetailType, getFixedItemsByMonth, monthKey]);
-
-  const totalIncomeWithFixedPrev = prevIncome + prevFixedIncomeTotal;
-  const totalExpenseWithFixedPrev = prevExpense + prevFixedExpenseTotal;
 
   const {
     incomeCurrentPct,
@@ -487,13 +406,13 @@ const FinanceReportScreen: React.FC = () => {
     expensePrevPct,
   } = useMemo(() => {
     const maxIncome = Math.max(
-      totalIncomeWithFixed,
-      totalIncomeWithFixedPrev,
+      totalIncome,
+      prevIncome,
       1,
     );
     const maxExpense = Math.max(
-      totalExpenseWithFixed,
-      totalExpenseWithFixedPrev,
+      totalExpense,
+      prevExpense,
       1,
     );
 
@@ -501,23 +420,23 @@ const FinanceReportScreen: React.FC = () => {
 
     return {
       incomeCurrentPct: clamp(
-        (totalIncomeWithFixed / maxIncome) * 100,
+        (totalIncome / maxIncome) * 100,
       ),
       incomePrevPct: clamp(
-        (totalIncomeWithFixedPrev / maxIncome) * 100,
+        (prevIncome / maxIncome) * 100,
       ),
       expenseCurrentPct: clamp(
-        (totalExpenseWithFixed / maxExpense) * 100,
+        (totalExpense / maxExpense) * 100,
       ),
       expensePrevPct: clamp(
-        (totalExpenseWithFixedPrev / maxExpense) * 100,
+        (prevExpense / maxExpense) * 100,
       ),
     };
   }, [
-    totalIncomeWithFixed,
-    totalIncomeWithFixedPrev,
-    totalExpenseWithFixed,
-    totalExpenseWithFixedPrev,
+    totalIncome,
+    prevIncome,
+    totalExpense,
+    prevExpense,
   ]);
 
   const maxYearExpense = useMemo(
@@ -541,21 +460,22 @@ const FinanceReportScreen: React.FC = () => {
       addRow([]);
 
       addRow(['Tổng quan tháng', monthLabel]);
-      addRow(['Thu nhập (bao gồm cố định)', totalIncomeWithFixed]);
-      addRow(['Chi tiêu (bao gồm cố định)', totalExpenseWithFixed]);
-      addRow(['Còn lại', balance]);
+      addRow(['Thu nhập', totalIncome]);
+      addRow(['Chi tiêu', totalExpense]);
+      addRow(['Số dư còn lại (tổng quỹ hiện tại)', totalFundBalance]);
+      addRow(['Chênh lệch thu-chi (tháng)', netForSelectedMonth]);
       addRow([]);
 
       addRow(['So sánh với tháng trước']);
-      addRow(['Thu nhập tháng này (bao gồm cố định)', totalIncomeWithFixed]);
+      addRow(['Thu nhập tháng này', totalIncome]);
       addRow([
-        'Thu nhập tháng trước (bao gồm cố định)',
-        totalIncomeWithFixedPrev,
+        'Thu nhập tháng trước',
+        prevIncome,
       ]);
-      addRow(['Chi tiêu tháng này (bao gồm cố định)', totalExpenseWithFixed]);
+      addRow(['Chi tiêu tháng này', totalExpense]);
       addRow([
-        'Chi tiêu tháng trước (bao gồm cố định)',
-        totalExpenseWithFixedPrev,
+        'Chi tiêu tháng trước',
+        prevExpense,
       ]);
       addRow([]);
 
@@ -591,15 +511,15 @@ const FinanceReportScreen: React.FC = () => {
       setExportModalVisible(true);
     } catch (error) {
       console.error('Error exporting report:', error);
-      Alert.alert(
+      showError(
         'Xuất báo cáo thất bại',
         'Không thể xuất file báo cáo. Vui lòng thử lại.',
       );
     }
   }, [
-    totalIncomeWithFixed,
-    totalExpenseWithFixed,
-    balance,
+    showError,
+    totalFundBalance,
+    netForSelectedMonth,
     totalIncome,
     totalExpense,
     prevIncome,
@@ -637,8 +557,8 @@ const FinanceReportScreen: React.FC = () => {
   };
 
   const expenseDiff = useMemo(
-    () => totalExpenseWithFixed - totalExpenseWithFixedPrev,
-    [totalExpenseWithFixed, totalExpenseWithFixedPrev],
+    () => totalExpense - prevExpense,
+    [totalExpense, prevExpense],
   );
 
   return (
@@ -681,9 +601,17 @@ const FinanceReportScreen: React.FC = () => {
           >
             <Text style={styles.monthNavText}>‹</Text>
           </TouchableOpacity>
-          <Text style={styles.monthLabel}>
-            {formatMonthLabel(selectedMonthDate)}
-          </Text>
+          <TouchableOpacity
+            activeOpacity={0.7}
+            onPress={() => {
+              setMonthPickerYear(selectedMonthDate.getFullYear());
+              setMonthPickerVisible(true);
+            }}
+          >
+            <Text style={styles.monthLabel}>
+              {formatMonthLabel(selectedMonthDate)}
+            </Text>
+          </TouchableOpacity>
           <TouchableOpacity
             style={[
               styles.monthNavBtn,
@@ -722,7 +650,7 @@ const FinanceReportScreen: React.FC = () => {
                 </Text>
               </View>
               <Text style={[styles.summaryValue, { color: colors.success }]}>
-                {totalIncomeWithFixed.toLocaleString('vi-VN')}đ
+                {totalIncome.toLocaleString('vi-VN')}đ
               </Text>
             </View>
             <View style={styles.summaryItem}>
@@ -733,52 +661,20 @@ const FinanceReportScreen: React.FC = () => {
                 </Text>
               </View>
               <Text style={[styles.summaryValue, { color: colors.error }]}>
-                {totalExpenseWithFixed.toLocaleString('vi-VN')}đ
+                {totalExpense.toLocaleString('vi-VN')}đ
               </Text>
             </View>
           </View>
           <View style={styles.balanceRow}>
-            <Text style={styles.summaryLabel}>Còn lại</Text>
+            <Text style={styles.summaryLabel}>Số dư còn lại</Text>
             <Text
               style={[
                 styles.balanceValue,
-                { color: balance >= 0 ? colors.success : colors.error },
+                { color: totalFundBalance >= 0 ? colors.success : colors.error },
               ]}
             >
-              {balance.toLocaleString('vi-VN')}đ
+              {totalFundBalance.toLocaleString('vi-VN')}đ
             </Text>
-          </View>
-        </View>
-
-        <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>Thu / Chi cố định</Text>
-          <View style={styles.fixedRow}>
-            <TouchableOpacity
-              style={styles.fixedItem}
-              activeOpacity={0.7}
-              onPress={() => {
-                setFixedDetailType('income');
-                setFixedDetailVisible(true);
-              }}
-            >
-              <Text style={styles.fixedLabel}>Thu cố định</Text>
-              <Text
-                style={[styles.fixedValue, { color: colors.success }]}
-              >{`+${fixedIncomeTotal.toLocaleString('vi-VN')}đ`}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.fixedItem}
-              activeOpacity={0.7}
-              onPress={() => {
-                setFixedDetailType('expense');
-                setFixedDetailVisible(true);
-              }}
-            >
-              <Text style={styles.fixedLabel}>Chi cố định</Text>
-              <Text
-                style={[styles.fixedValue, { color: colors.error }]}
-              >{`-${fixedExpenseTotal.toLocaleString('vi-VN')}đ`}</Text>
-            </TouchableOpacity>
           </View>
         </View>
 
@@ -926,117 +822,43 @@ const FinanceReportScreen: React.FC = () => {
         <View style={{ height: 40 }} />
       </ScrollView>
 
+      {/* Month Picker Modal */}
       <Modal
-        isVisible={fixedDetailVisible}
-        onBackdropPress={() => setFixedDetailVisible(false)}
-        onBackButtonPress={() => setFixedDetailVisible(false)}
-        onSwipeComplete={() => setFixedDetailVisible(false)}
-        swipeDirection={['down']}
-        scrollTo={(p: { x?: number; y: number; animated?: boolean }) =>
-          fixedModalScrollRef.current?.scrollTo(p)
-        }
-        scrollOffset={fixedModalScrollOffset}
-        scrollOffsetMax={Math.max(0, fixedModalContentHeight - fixedModalLayoutHeight)}
-        propagateSwipe
-        backdropOpacity={0.5}
-        animationIn="slideInUp"
-        animationOut="slideOutDown"
-        backdropTransitionOutTiming={0}
-        style={styles.fixedModal}
+        isVisible={monthPickerVisible}
+        onBackdropPress={() => setMonthPickerVisible(false)}
+        onBackButtonPress={() => setMonthPickerVisible(false)}
+        useNativeDriver
+        hideModalContentWhileAnimating
       >
-        <View style={styles.fixedModalContent}>
-          <View style={styles.fixedModalIndicator} />
-
-          <Text style={styles.fixedModalTitle}>
-            {fixedDetailType === 'income' ? 'Thu cố định' : 'Chi cố định'}{' '}
-            {formatMonthLabel(selectedMonthDate)}
-          </Text>
-
-          {fixedItemsForSelectedMonth.length === 0 ? (
-            <Text style={styles.fixedModalEmpty}>
-              Không có khoản cố định nào trong tháng này
-            </Text>
-          ) : (
-            <ScrollView
-              ref={ref => {
-                fixedModalScrollRef.current = ref;
-              }}
-              style={styles.fixedModalList}
-              contentContainerStyle={styles.fixedModalListContent}
-              showsVerticalScrollIndicator={false}
-              onLayout={e => setFixedModalLayoutHeight(e.nativeEvent.layout.height)}
-              onContentSizeChange={(_, h) => setFixedModalContentHeight(h)}
-              scrollEventThrottle={16}
-              onScroll={e => {
-                setFixedModalScrollOffset(e.nativeEvent.contentOffset.y);
-              }}
+        <View style={styles.monthPickerCard}>
+          <View style={styles.monthPickerHeader}>
+            <TouchableOpacity
+              onPress={() => setMonthPickerVisible(false)}
+              activeOpacity={0.7}
             >
-              {fixedItemsForSelectedMonth.map(item => {
-                const category =
-                  fixedDetailType === 'income'
-                    ? getFixedIncomeCategory(item.categoryId)
-                    : getFixedExpenseCategory(item.categoryId);
-                if (!category) {
-                  return null;
-                }
-                const IconComponent = category.icon;
-                const amountLabel = `${item.amount.toLocaleString(
-                  'vi-VN',
-                )}đ`;
+              <View style={styles.monthPickerBack}>
+                <ChevronLeftIcon width={18} height={18} color={colors.text} />
+              </View>
+            </TouchableOpacity>
+            <Text style={styles.monthPickerTitle}>Chọn tháng</Text>
+            <TouchableOpacity
+              onPress={() => setMonthPickerVisible(false)}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.monthPickerClose}>Đóng</Text>
+            </TouchableOpacity>
+          </View>
 
-                return (
-                  <View key={item.id} style={styles.fixedModalRow}>
-                    <View style={styles.fixedModalLeft}>
-                      <View
-                        style={[
-                          styles.fixedModalIcon,
-                          { backgroundColor: category.color + '15' },
-                        ]}
-                      >
-                        <IconComponent
-                          width={20}
-                          height={20}
-                          color={category.color}
-                        />
-                      </View>
-                      <View style={styles.fixedModalInfo}>
-                        <Text style={styles.fixedModalName}>
-                          {category.name}
-                        </Text>
-                        {item.note ? (
-                          <Text style={styles.fixedModalNote} numberOfLines={1}>
-                            {item.note}
-                          </Text>
-                        ) : null}
-                      </View>
-                    </View>
-                    <Text
-                      style={[
-                        styles.fixedModalAmount,
-                        {
-                          color:
-                            fixedDetailType === 'income'
-                              ? colors.success
-                              : colors.error,
-                        },
-                      ]}
-                    >
-                      {fixedDetailType === 'income' ? '+' : '-'}
-                      {amountLabel}
-                    </Text>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          )}
-
-          <TouchableOpacity
-            style={styles.fixedModalCloseButton}
-            activeOpacity={0.7}
-            onPress={() => setFixedDetailVisible(false)}
-          >
-            <Text style={styles.fixedModalCloseText}>Đóng</Text>
-          </TouchableOpacity>
+          <MonthPicker
+            year={monthPickerYear}
+            selectedMonth={selectedMonthDate.getMonth()}
+            onChangeYear={setMonthPickerYear}
+            onSelectMonth={monthIndex => {
+              const picked = new Date(monthPickerYear, monthIndex, 1);
+              setSelectedMonthDate(picked);
+              setMonthPickerVisible(false);
+            }}
+          />
         </View>
       </Modal>
 
@@ -1076,6 +898,13 @@ const FinanceReportScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      <ErrorPopup
+        visible={errorPopupVisible}
+        title={errorPopupTitle}
+        message={errorPopupMessage}
+        onClose={() => setErrorPopupVisible(false)}
+      />
     </View>
   );
 };
@@ -1149,6 +978,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: colors.textSecondary,
+  },
+  monthPickerCard: {
+    marginHorizontal: 20,
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    paddingBottom: 16,
+    overflow: 'hidden',
+  },
+  monthPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 8,
+  },
+  monthPickerBack: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+  },
+  monthPickerTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  monthPickerClose: {
+    fontSize: 15,
+    color: colors.primary,
+    fontWeight: '600',
   },
   exportButton: {
     paddingHorizontal: 14,
@@ -1312,113 +1170,6 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderRadius: 20,
     padding: 20,
-  },
-  fixedRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  fixedItem: {
-    flex: 1,
-  },
-  fixedLabel: {
-    fontSize: 13,
-    color: colors.textSecondary,
-    marginBottom: 4,
-  },
-  fixedValue: {
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  fixedModal: {
-    justifyContent: 'flex-end',
-    margin: 0,
-  },
-  fixedModalContent: {
-    flex: 1,
-    backgroundColor: colors.white,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 24,
-    maxHeight: '100%',
-  },
-  fixedModalIndicator: {
-    width: 40,
-    height: 4,
-    backgroundColor: colors.textLight,
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginTop: 8,
-    marginBottom: 12,
-  },
-  fixedModalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 12,
-    textAlign: 'center',
-  },
-  fixedModalEmpty: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textAlign: 'center',
-    paddingVertical: 16,
-  },
-  fixedModalList: {
-    flex: 1,
-    marginTop: 4,
-  },
-  fixedModalListContent: {
-    paddingBottom: 12,
-  },
-  fixedModalRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-  },
-  fixedModalLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  fixedModalIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  fixedModalInfo: {
-    flex: 1,
-  },
-  fixedModalName: {
-    fontSize: 15,
-    fontWeight: '500',
-    color: colors.text,
-    marginBottom: 2,
-  },
-  fixedModalNote: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  fixedModalAmount: {
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  fixedModalCloseButton: {
-    marginTop: 20,
-    borderRadius: 12,
-    backgroundColor: colors.primary,
-    paddingVertical: 12,
-    alignItems: 'center',
-  },
-  fixedModalCloseText: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: colors.white,
   },
   sectionBlock: {
     marginHorizontal: 20,

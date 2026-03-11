@@ -62,6 +62,8 @@ class QuickAddWidgetProvider : AppWidgetProvider() {
             flags
         )
 
+        // Cho phép bấm cả widget hoặc nút "Thêm" đều mở app
+        views.setOnClickPendingIntent(R.id.widget_root, pendingIntent)
         views.setOnClickPendingIntent(R.id.widget_add_button, pendingIntent)
 
         appWidgetManager.updateAppWidget(appWidgetId, views)

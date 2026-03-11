@@ -8,61 +8,17 @@ import {
   getDocs,
   deleteDoc,
   doc,
-  limit,
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
 
 const firestoreInstance = getFirestore(getApp());
 
 const TRANSACTIONS_COLLECTION = 'transactions';
-const FIXED_ITEMS_COLLECTION = 'fixedItems';
-const BATCH_SIZE = 200;
 const YEARLY_RESET_KEY_PREFIX = 'yearly_reset_year_';
 const YEARS_TO_KEEP = 3;
 
-function getMonthKeyFromDate(d: Date): string {
-  const year = d.getFullYear();
-  const month = `${d.getMonth() + 1}`.padStart(2, '0');
-  return `${year}-${month}`;
-}
-
 /**
- * Tính monthKey dạng 'YYYY-MM' cho fixed item dựa trên effectiveFromMonth hoặc createdAt.
- * Nếu không có thông tin thì fallback về '0000-00' để luôn nằm "rất cũ".
- */
-function getFixedItemMonthKey(
-  data: FirebaseFirestoreTypes.DocumentData,
-): string {
-  const effectiveFromMonth = data.effectiveFromMonth as string | undefined;
-  if (effectiveFromMonth) {
-    return effectiveFromMonth;
-  }
-
-  const created = data.createdAt as
-    | FirebaseFirestoreTypes.Timestamp
-    | Date
-    | undefined;
-
-  if (created instanceof Date) {
-    return getMonthKeyFromDate(created);
-  }
-
-  if (
-    created &&
-    typeof (created as FirebaseFirestoreTypes.Timestamp).toDate === 'function'
-  ) {
-    return getMonthKeyFromDate(
-      (created as FirebaseFirestoreTypes.Timestamp).toDate(),
-    );
-  }
-
-  return '0000-00';
-}
-
-/**
- * Xóa toàn bộ giao dịch của user trước một mốc thời gian cho trước.
- * Để tránh phải tạo index Firestore phức tạp, hàm này chỉ filter theo userId
- * trên server rồi lọc transactionDate ở client.
+ * Xóa toàn bộ transaction của user trước mốc thời gian cho trước.
  */
 async function deleteOldTransactionsForUser(
   userId: string,
@@ -75,6 +31,7 @@ async function deleteOldTransactionsForUser(
 
   const q = query(transactionsCollection, where('userId', '==', userId));
   const snapshot = await getDocs(q);
+
   console.log(
     '[Firestore] resetData.deleteOldTransactionsForUser size=',
     snapshot.size,
@@ -85,13 +42,14 @@ async function deleteOldTransactionsForUser(
   const deletions: Promise<void>[] = [];
 
   snapshot.forEach((docSnap: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
-    const data = docSnap.data() as FirebaseFirestoreTypes.DocumentData;
+    const data = docSnap.data();
     const ts = data.transactionDate as
       | FirebaseFirestoreTypes.Timestamp
       | Date
       | undefined;
 
     let date: Date | null = null;
+
     if (ts instanceof Date) {
       date = ts;
     } else if (
@@ -116,92 +74,31 @@ async function deleteOldTransactionsForUser(
 }
 
 /**
- * Xóa các fixedItems của user cũ hơn mốc monthKey cho trước.
- * Giữ lại:
- * - Mọi bản ghi có effectiveFromMonth >= cutoffMonthKey
- * - & các bản sau này.
- */
-async function deleteOldFixedItemsForUser(
-  userId: string,
-  cutoffMonthKey: string,
-): Promise<void> {
-  const fixedItemsCollection = collection(
-    firestoreInstance,
-    FIXED_ITEMS_COLLECTION,
-  );
-
-  const q = query(fixedItemsCollection, where('userId', '==', userId));
-  const snapshot = await getDocs(q);
-  console.log(
-    '[Firestore] resetData.deleteOldFixedItemsForUser size=',
-    snapshot.size,
-  );
-
-  if (snapshot.empty) return;
-
-  const deletions: Promise<void>[] = [];
-
-  snapshot.forEach((docSnap: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
-    const data = docSnap.data();
-    const monthKey = getFixedItemMonthKey(data);
-
-    if (monthKey < cutoffMonthKey) {
-      deletions.push(
-        deleteDoc(doc(firestoreInstance, FIXED_ITEMS_COLLECTION, docSnap.id)),
-      );
-    }
-  });
-
-  if (deletions.length > 0) {
-    await Promise.all(deletions);
-  }
-}
-
-/**
- * Reset data cũ của một user nhưng vẫn giữ lại dữ liệu khoảng 3 năm gần nhất
- * (tính từ tháng 12 của năm cách đây `YEARS_TO_KEEP` năm trở lại đây).
- *
- * Logic:
- * - Lấy năm hiện tại N.
- * - Tính baseYear = N - YEARS_TO_KEEP.
- * - Giữ lại:
- *   + Toàn bộ dữ liệu từ tháng 12 của baseYear trở đi.
- *   + Xóa mọi transaction trước ngày 01/12/baseYear.
- *   + Xóa mọi fixedItem có effectiveFromMonth < `${baseYear}-12`.
+ * Reset transactions cũ của user nhưng giữ lại dữ liệu 3 năm gần nhất
+ * (tính từ tháng 12 của năm cách đây YEARS_TO_KEEP năm).
  *
  * Ví dụ:
- * - Đang năm 2026:
- *   + Giữ lại từ 12/2025 trở đi.
- *   + Xóa mọi thứ trước 12/2025.
+ * - Đang năm 2026
+ * - YEARS_TO_KEEP = 3
+ * → Giữ lại từ 01/12/2023 trở đi
  */
-export async function resetUserDataKeepLastDecember(
+export async function resetUserTransactionsKeepLastDecember(
   userId: string,
 ): Promise<void> {
   const now = new Date();
   const currentYear = now.getFullYear();
   const baseYear = currentYear - YEARS_TO_KEEP;
 
-  // 01/12 của năm baseYear
   const startOfPrevDecember = new Date(baseYear, 11, 1, 0, 0, 0, 0);
-  const cutoffMonthKey = `${baseYear}-12`;
 
-  await Promise.all([
-    deleteOldTransactionsForUser(userId, startOfPrevDecember),
-    deleteOldFixedItemsForUser(userId, cutoffMonthKey),
-  ]);
+  await deleteOldTransactionsForUser(userId, startOfPrevDecember);
 }
 
 /**
- * Thực hiện reset data hàng năm cho user nếu chưa reset trong năm hiện tại.
- *
- * Cách hoạt động:
- * - Chỉ chạy khi đang ở NĂM hiện tại và đã qua 01/01 (tức là bất kỳ lúc nào trong năm đó).
- * - Lưu lại năm đã reset vào AsyncStorage theo từng user.
- * - Nếu đã reset cho năm đó rồi thì không chạy lại.
- *
- * Gọi hàm này ở chỗ khởi động app sau khi xác định được user (ví dụ Splash / Home).
+ * Thực hiện reset transaction mỗi năm nếu chưa reset trong năm hiện tại.
+ * Gọi ở Splash/Home sau khi có userId.
  */
-export async function maybeResetUserDataYearly(
+export async function maybeResetUserTransactionsYearly(
   userId: string,
 ): Promise<void> {
   if (!userId) return;
@@ -209,22 +106,15 @@ export async function maybeResetUserDataYearly(
   const now = new Date();
   const currentYear = now.getFullYear();
 
-  // Đảm bảo chỉ chạy từ 01/01 trở đi (nhưng nếu mở app trễ hơn trong năm thì vẫn chạy).
-  // Nếu vì lý do nào đó đồng hồ hệ thống sai ngày/năm thì logic này cũng sẽ lệch theo.
   const key = `${YEARLY_RESET_KEY_PREFIX}${userId}`;
   const stored = await AsyncStorage.getItem(key);
   const lastResetYear = stored ? Number(stored) : NaN;
 
   if (!Number.isNaN(lastResetYear) && lastResetYear >= currentYear) {
-    // Năm nay đã reset rồi.
-    return;
+    return; // Năm nay đã reset rồi
   }
 
-  // Tiến hành reset dữ liệu cũ, giữ lại tháng 12 của năm trước.
-  await resetUserDataKeepLastDecember(userId);
+  await resetUserTransactionsKeepLastDecember(userId);
 
-  // Ghi lại năm đã reset để tránh chạy lại trong năm nay.
   await AsyncStorage.setItem(key, String(currentYear));
 }
-
-

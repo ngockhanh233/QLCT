@@ -6,6 +6,8 @@ export type AuthStoredUser = {
   email?: string | null;
   displayName?: string | null;
   photoURL?: string | null;
+  /** Đã hoàn thành setup quỹ (có ít nhất 1 quỹ) → vào thẳng app, không check Firestore nữa */
+  hasCompletedFundSetup?: boolean;
 };
 
 export async function getStoredUser(): Promise<AuthStoredUser | null> {

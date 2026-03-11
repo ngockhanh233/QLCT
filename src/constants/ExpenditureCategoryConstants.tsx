@@ -11,6 +11,7 @@ import {
   InternetIcon,
   PhoneIcon,
   RentIcon,
+  SubscriptionIcon,
   EntertainmentIcon,
   MovieIcon,
   TravelIcon,
@@ -45,12 +46,18 @@ export interface ExpenditureCategory {
 }
 
 export const EXPENDITURE_CATEGORIES: ExpenditureCategory[] = [
-  // Ăn uống
+  // Hay dùng
   {
     id: 'food',
     name: 'Ăn uống',
     icon: FoodIcon,
     color: '#FF6B35',
+  },
+  {
+    id: 'rent',
+    name: 'Tiền nhà',
+    icon: RentIcon,
+    color: '#795548',
   },
   {
     id: 'coffee',
@@ -113,10 +120,10 @@ export const EXPENDITURE_CATEGORIES: ExpenditureCategory[] = [
     color: '#00BCD4',
   },
   {
-    id: 'rent',
-    name: 'Tiền nhà',
-    icon: RentIcon,
-    color: '#795548',
+    id: 'subscription',
+    name: 'Đăng ký',
+    icon: SubscriptionIcon,
+    color: '#FF9800',
   },
 
   // Giải trí

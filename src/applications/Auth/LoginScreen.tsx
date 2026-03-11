@@ -9,11 +9,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApp } from '@react-native-firebase/app';
 import {
   getAuth,
@@ -22,7 +20,8 @@ import {
 } from '@react-native-firebase/auth';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { colors } from '../../utils/color';
-import { AUTH_STORAGE_KEY } from '../../constants';
+import { setStoredUser, type AuthStoredUser } from '../../services';
+import { ErrorPopup } from '../../components';
 
 const { width } = Dimensions.get('window');
 
@@ -35,6 +34,8 @@ interface LoginScreenProps {
 const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
   const insets = useSafeAreaInsets();
   const [isLoading, setIsLoading] = useState(false);
+  const [errorVisible, setErrorVisible] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
 
   useEffect(() => {
     GoogleSignin.configure({
@@ -57,12 +58,14 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       const googleCredential = GoogleAuthProvider.credential(response.data.idToken);
       const userCredential = await signInWithCredential(firebaseAuth, googleCredential);
 
-      await AsyncStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
+      const baseUser: AuthStoredUser = {
         uid: userCredential.user.uid,
         email: userCredential.user.email,
         displayName: userCredential.user.displayName,
         photoURL: userCredential.user.photoURL,
-      }));
+      };
+
+      await setStoredUser(baseUser);
 
       onLoginSuccess();
     } catch (error: any) {
@@ -76,7 +79,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
         message = 'Google Play Services không khả dụng';
       }
 
-      Alert.alert('Lỗi', message);
+      setErrorMessage(message);
+      setErrorVisible(true);
       console.error('Google Sign-In Error:', error);
     } finally {
       setIsLoading(false);
@@ -143,6 +147,13 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
           </Text>
         </View>
       </ScrollView>
+
+      <ErrorPopup
+        visible={errorVisible}
+        title="Lỗi"
+        message={errorMessage}
+        onClose={() => setErrorVisible(false)}
+      />
     </KeyboardAvoidingView>
   );
 };

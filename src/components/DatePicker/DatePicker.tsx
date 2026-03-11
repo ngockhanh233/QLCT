@@ -10,6 +10,7 @@ import {
 import { Calendar, LocaleConfig } from 'react-native-calendars';
 import { colors } from '../../utils/color';
 import CalendarIcon from '../../assets/icons/CalendarIcon';
+import ChevronLeftIcon from '../../assets/icons/ChevronLeftIcon';
 
 LocaleConfig.locales['vi'] = {
   monthNames: [
@@ -263,7 +264,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
                     onPress={() => setViewMode(viewMode === 'year' ? 'month' : 'calendar')}
                     style={styles.backButton}
                   >
-                    <Text style={styles.backButtonText}>←</Text>
+                    <ChevronLeftIcon width={18} height={18} color={colors.text} />
                   </TouchableOpacity>
                 )}
                 <Text style={styles.modalTitle}>
@@ -344,11 +345,6 @@ const styles = StyleSheet.create({
   backButton: {
     marginRight: 12,
     padding: 4,
-  },
-  backButtonText: {
-    fontSize: 20,
-    color: colors.primary,
-    fontWeight: '600',
   },
   modalTitle: {
     fontSize: 18,

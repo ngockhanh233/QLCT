@@ -19,6 +19,7 @@ import { colors } from '../../../../utils/color';
 import UserIcon from '../../../../assets/icons/UserIcon';
 import BudgetIcon from '../../../../assets/icons/BudgetIcon';
 import BellIcon from '../../../../assets/icons/BellIcon';
+import WalletIcon from '../../../../assets/icons/WalletIcon';
 import { AuthStoredUser, clearStoredUser, getStoredUser } from '../../../../services';
 import { confirm } from '../../../../utils/confirm';
 import type { RootStackParamList } from '../../MainScreen';
@@ -91,7 +92,23 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
   }, []);
 
   const handleOpenFinanceReport = () => {
-    navigation.navigate('FinanceReport');
+    (navigation.getParent() as { navigate: (name: 'FinanceReport') => void } | undefined)
+      ?.navigate('FinanceReport');
+  };
+
+  const handleOpenFundManagement = () => {
+    (navigation.getParent() as { navigate: (name: 'FundManagement') => void } | undefined)
+      ?.navigate('FundManagement');
+  };
+
+  const handleOpenIncomeSources = () => {
+    (navigation.getParent() as { navigate: (name: 'IncomeSources') => void } | undefined)
+      ?.navigate('IncomeSources');
+  };
+
+  const handleOpenBalanceNotifications = () => {
+    (navigation.getParent() as { navigate: (name: 'Notifications') => void } | undefined)
+      ?.navigate('Notifications');
   };
 
   const handleLogout = async () => {
@@ -158,10 +175,22 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
         {/* Menu Section */}
         <View style={styles.section}>
           <View style={styles.menuGroup}>
-            <MenuItem
+            {/* <MenuItem
               icon={<UserIcon width={18} height={18} color={colors.text} />}
               title="Thông tin cá nhân"
               subtitle="Tên, email, số điện thoại"
+            />
+            <MenuItem
+              icon={<WalletIcon width={18} height={18} color={colors.text} />}
+              title="Quản lý quỹ"
+              subtitle="Tạo và quản lý các quỹ chi tiêu"
+              onPress={handleOpenFundManagement}
+            /> */}
+            <MenuItem
+              icon={<WalletIcon width={18} height={18} color={colors.text} />}
+              title="Thiết lập nguồn thu"
+              subtitle="Tự động chia thu nhập theo quỹ"
+              onPress={handleOpenIncomeSources}
             />
             <MenuItem
               icon={<BudgetIcon width={18} height={18} color={colors.text} />}
@@ -169,7 +198,7 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
               subtitle="Xem và xuất báo cáo chi tiêu"
               onPress={handleOpenFinanceReport}
             />
-            <MenuItem
+            {/* <MenuItem
               icon={
                 <BellIcon
                   width={18}
@@ -187,6 +216,18 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
                   thumbColor={notificationsEnabled ? colors.primary : colors.textLight}
                 />
               }
+            /> */}
+            <MenuItem
+              icon={
+                <BellIcon
+                  width={18}
+                  height={18}
+                  color={colors.text}
+                />
+              }
+              title="Thông báo số dư"
+              subtitle="Theo dõi biến động số dư trong các quỹ"
+              onPress={handleOpenBalanceNotifications}
             />
           </View>
         </View>
