@@ -25,6 +25,105 @@ import {
 import type { RootStackParamList } from '../../MainScreen';
 import { SwipeableRow } from '../../../../components';
 
+/** Hiển thị message có cấu trúc:
+ * - "Tên quỹ" (dòng tiêu đề)
+ * - +Xđ / −Xđ - Số dư: Yđ (dòng biến động)
+ * - • "Tên quỹ" + các dòng ↳ ... (cho một số thông báo split)
+ */
+function BalanceNotificationMessage({ message }: { message: string }) {
+  const lines = message.split('\n');
+  return (
+    <View style={styles.cardMessageColumn}>
+      {lines.map((line, index) => {
+        const trimmedEnd = line.trimEnd();
+        const trimmed = line.trim();
+        if (trimmed === '') {
+          return <View key={`sp-${index}`} style={styles.msgLineSpacer} />;
+        }
+        if (/^".+"$/.test(trimmed)) {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgFundNameHeader]} selectable>
+              {trimmed}
+            </Text>
+          );
+        }
+        // Dòng kiểu: +7.000.000đ - Số dư: 30.000.000đ
+        if (
+          (trimmed.startsWith('+') || trimmed.startsWith('\u2212') || trimmed.startsWith('-')) &&
+          trimmed.includes('Số dư:') &&
+          trimmed.includes('đ')
+        ) {
+          const isNegative = trimmed.startsWith('\u2212') || trimmed.startsWith('-');
+          const needle = ' - Số dư: ';
+          const split = trimmedEnd.split(needle);
+          const amountPart = split[0] ?? trimmedEnd;
+          const balancePart = split[1] ?? '';
+          return (
+            <Text key={index} style={styles.cardMessage} selectable>
+              <Text
+                style={[
+                  styles.msgDeltaAmount,
+                  isNegative ? styles.msgDeltaNegative : styles.msgDeltaPositive,
+                ]}
+              >
+                {amountPart}
+              </Text>
+              {balancePart ? (
+                <Text style={styles.msgBalanceInline}>
+                  {needle}
+                  {balancePart}
+                </Text>
+              ) : (
+                <Text style={styles.msgBalanceInline}>{trimmedEnd}</Text>
+              )}
+            </Text>
+          );
+        }
+        if (trimmedEnd.startsWith('• ')) {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgBullet]}>
+              {trimmedEnd}
+            </Text>
+          );
+        }
+        if (trimmed.startsWith('↳')) {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgSubNote]} selectable>
+              {trimmed}
+            </Text>
+          );
+        }
+        if (/^\s{2,}\S/.test(line) && !trimmed.startsWith('•')) {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgIndented]} selectable>
+              {trimmedEnd.trimStart()}
+            </Text>
+          );
+        }
+        if (trimmed.startsWith('Tổng số dư:')) {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgTotalLine]} selectable>
+              {trimmedEnd}
+            </Text>
+          );
+        }
+        if (trimmed === 'Biến động số dư quỹ:') {
+          return (
+            <Text key={index} style={[styles.cardMessage, styles.msgSectionTitle]} selectable>
+              {trimmedEnd}
+            </Text>
+          );
+        }
+        return (
+          <Text key={index} style={styles.cardMessage} selectable>
+            {trimmedEnd}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
 const NotificationsScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -221,7 +320,7 @@ const NotificationsScreen: React.FC = () => {
                   </View>
                   <Text style={styles.cardTime}>{renderTime(item.createdAtMs)}</Text>
                 </View>
-                <Text style={styles.cardMessage}>{item.message}</Text>
+                <BalanceNotificationMessage message={item.message} />
               </View>
             </SwipeableRow>
           </View>
@@ -357,6 +456,79 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.textSecondary,
     lineHeight: 18,
+  },
+  cardMessageColumn: {
+    gap: 2,
+  },
+  msgLineSpacer: {
+    height: 8,
+  },
+  msgBullet: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.text,
+    lineHeight: 19,
+    marginTop: 2,
+  },
+  msgIndented: {
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 19,
+    paddingLeft: 14,
+    opacity: 0.92,
+  },
+  msgSubNote: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+    lineHeight: 17,
+    paddingLeft: 14,
+  },
+  msgFundNameHeader: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: colors.text,
+    lineHeight: 18,
+    marginTop: 2,
+  },
+  msgDeltaLine: {
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 19,
+  },
+  msgDeltaPositive: {
+    color: colors.success,
+  },
+  msgDeltaNegative: {
+    color: colors.error,
+  },
+  msgDeltaAmount: {
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 19,
+  },
+  msgBalanceInline: {
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 19,
+    color: colors.text,
+  },
+  msgSectionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+    lineHeight: 19,
+    marginTop: 2,
+  },
+  msgTotalLine: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.text,
+    lineHeight: 20,
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
   },
   errorCard: {
     backgroundColor: colors.white,

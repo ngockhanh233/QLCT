@@ -19,7 +19,10 @@ export const showSnackbar = (options: SnackbarOptions) => {
     // Nếu provider chưa mount thì bỏ qua, tránh crash
     return;
   }
-
-  handler(options);
+  // Defer sang tick sau để tránh giật animation khi đang đóng modal.
+  const impl = handler;
+  setTimeout(() => {
+    impl(options);
+  }, 0);
 };
 

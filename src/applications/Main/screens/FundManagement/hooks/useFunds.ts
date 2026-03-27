@@ -20,6 +20,7 @@ import {
 import { getStoredUser, pushBalanceNotification } from '../../../../../services';
 import { showSnackbar } from '../../../../../utils/snackbar';
 import type { FundRecord } from '../../../../../types/fund';
+import { DEFAULT_FUND_ICON_ID } from '../../../../../constants/FundIconConstants';
 
 const COLLECTION_NAME = 'funds';
 type QueryDoc =
@@ -45,6 +46,7 @@ async function fetchFunds(userId: string): Promise<FundRecord[]> {
       name: data.name as string,
       balance: (data.balance as number) ?? 0,
       color: data.color as string | undefined,
+      icon: (data.icon as string | null | undefined) ?? undefined,
       isDefault: data.isDefault as boolean | undefined,
       createdAt: (data.createdAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
       updatedAt: (data.updatedAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
@@ -65,6 +67,7 @@ export async function ensureDefaultFund(userId: string): Promise<string> {
     name: DEFAULT_FUND_NAME,
     balance: 0,
     color: DEFAULT_FUND_COLOR,
+    icon: DEFAULT_FUND_ICON_ID,
     isDefault: true,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -94,6 +97,7 @@ export async function createDefaultFundWithInitialBalance(userId: string, initia
     name: DEFAULT_FUND_NAME,
     balance: safeBalance,
     color: DEFAULT_FUND_COLOR,
+    icon: DEFAULT_FUND_ICON_ID,
     isDefault: true,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -124,8 +128,17 @@ type FundsContextValue = {
   isLoading: boolean;
   refresh: () => Promise<void> | void;
   ensureDefaultFundAndReload: () => Promise<string | null>;
-  createFund: (name: string, initialBalance?: number, color?: string, isDefault?: boolean) => Promise<string | null>;
-  updateFund: (id: string, updates: { name?: string; color?: string; isDefault?: boolean }) => Promise<boolean>;
+  createFund: (
+    name: string,
+    initialBalance?: number,
+    color?: string,
+    isDefault?: boolean,
+    icon?: string | null,
+  ) => Promise<string | null>;
+  updateFund: (
+    id: string,
+    updates: { name?: string; color?: string; isDefault?: boolean; icon?: string | null },
+  ) => Promise<boolean>;
   setFundBalance: (id: string, newBalance: number) => Promise<boolean>;
   topUpFund: (id: string, amount: number) => Promise<boolean>;
   transferToFund: (targetFundId: string, amount: number, sourceFundId: string) => Promise<boolean>;
@@ -197,7 +210,13 @@ function useFundsInternal(): FundsContextValue {
   }, [userId, loadFunds]);
 
   const createFund = useCallback(
-    async (name: string, initialBalance: number = 0, color?: string, isDefault: boolean = false): Promise<string | null> => {
+    async (
+      name: string,
+      initialBalance: number = 0,
+      color?: string,
+      isDefault: boolean = false,
+      icon?: string | null,
+    ): Promise<string | null> => {
       if (!userId) return null;
 
       try {
@@ -206,6 +225,7 @@ function useFundsInternal(): FundsContextValue {
           name: name.trim(),
           balance: initialBalance,
           color: color ?? null,
+          icon: icon ?? null,
           isDefault: isDefault || false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -217,12 +237,11 @@ function useFundsInternal(): FundsContextValue {
           const totalBefore = funds.reduce((sum, f) => sum + (f.balance ?? 0), 0);
           const totalAfter = totalBefore + (initialBalance > 0 ? initialBalance : 0);
           const totalLabel = `${totalAfter.toLocaleString('vi-VN')}đ`;
+          const signedDelta = `+${initialBalance.toLocaleString('vi-VN')}đ`;
           await pushBalanceNotification(userId, {
             kind: 'fund_created',
             title: 'Tạo quỹ',
-            message: initialBalance > 0
-              ? `Đã tạo quỹ "${name.trim()}".\nSố dư quỹ: ${amountLabel}\nTổng số dư: ${totalLabel}`
-              : `Đã tạo quỹ "${name.trim()}".\nTổng số dư: ${totalLabel}`,
+            message: `"${name.trim()}"\n${signedDelta} - Số dư: ${amountLabel}\nTổng số dư: ${totalLabel}`,
           });
         } catch {
           // ignore notification errors
@@ -243,7 +262,10 @@ function useFundsInternal(): FundsContextValue {
   );
 
   const updateFund = useCallback(
-    async (id: string, updates: { name?: string; color?: string; isDefault?: boolean }): Promise<boolean> => {
+    async (
+      id: string,
+      updates: { name?: string; color?: string; isDefault?: boolean; icon?: string | null },
+    ): Promise<boolean> => {
       if (!userId) return false;
 
       try {
@@ -295,10 +317,15 @@ function useFundsInternal(): FundsContextValue {
               ? totalBefore - oldBalance + newBalance
               : totalBefore;
           const totalLabel = `${totalAfter.toLocaleString('vi-VN')}đ`;
+          const minus = '\u2212';
+          const oldNum = typeof oldBalance === 'number' ? oldBalance : 0;
+          const delta = newBalance - oldNum;
+          const deltaAbs = Math.abs(delta).toLocaleString('vi-VN');
+          const signedDelta = delta >= 0 ? `+${deltaAbs}đ` : `${minus}${deltaAbs}đ`;
           await pushBalanceNotification(userId, {
             kind: 'fund_balance_set',
             title: 'Chỉnh số dư quỹ',
-            message: `Số dư "${name}" thay đổi: ${oldLabel} → ${newLabel}.\nSố dư quỹ: ${newLabel}\nTổng số dư: ${totalLabel}`,
+            message: `"${name}"\n${signedDelta} - Số dư: ${newLabel}\nTổng số dư: ${totalLabel}`,
           });
         } catch {
           // ignore notification errors
@@ -340,10 +367,11 @@ function useFundsInternal(): FundsContextValue {
           const totalBefore = funds.reduce((sum, f) => sum + (f.balance ?? 0), 0);
           const totalAfter = totalBefore + amount;
           const totalLabel = `${totalAfter.toLocaleString('vi-VN')}đ`;
+          const signedDelta = `+${amount.toLocaleString('vi-VN')}đ`;
           await pushBalanceNotification(userId, {
             kind: 'fund_topup',
             title: 'Nạp tiền',
-            message: `Đã nạp ${amountLabel} vào "${name}".\nSố dư quỹ: ${newBalanceLabel}\nTổng số dư: ${totalLabel}`,
+            message: `"${name}"\n${signedDelta} - Số dư: ${newBalanceLabel}\nTổng số dư: ${totalLabel}`,
           });
         } catch {
           // ignore notification errors
@@ -421,15 +449,44 @@ function useFundsInternal(): FundsContextValue {
             typeof targetNewBalance === 'number'
               ? `${targetNewBalance.toLocaleString('vi-VN')}đ`
               : '';
-          const totalLabel = `${funds.reduce((sum, f) => sum + (f.balance ?? 0), 0).toLocaleString('vi-VN')}đ`;
+
+          // Đọc tổng số dư mới nhất từ Firestore để tránh lệch do state chưa kịp đồng bộ.
+          let totalAfter: number | undefined;
+          try {
+            const fundsSnap = await getDocs(
+              query(
+                collection(firestoreInstance, COLLECTION_NAME),
+                where('userId', '==', userId),
+              ),
+            );
+            totalAfter = fundsSnap.docs.reduce(
+              (sum: number, d: QueryDoc) =>
+                sum + (((d.data() as any)?.balance as number) ?? 0),
+              0,
+            );
+          } catch {
+            // ignore and fallback to local state below
+          }
+
+          const totalLabel = `${(
+            typeof totalAfter === 'number'
+              ? totalAfter
+              : funds.reduce((sum, f) => sum + (f.balance ?? 0), 0)
+          ).toLocaleString('vi-VN')}đ`;
+          const minus = '\u2212';
+          const fmtSigned = (n: number) => {
+            const abs = Math.abs(n).toLocaleString('vi-VN');
+            return n >= 0 ? `+${abs}đ` : `${minus}${abs}đ`;
+          };
+          const safeSrcBal = typeof sourceNewBalance === 'number' ? `${sourceNewBalance.toLocaleString('vi-VN')}đ` : '0đ';
+          const safeDstBal = typeof targetNewBalance === 'number' ? `${targetNewBalance.toLocaleString('vi-VN')}đ` : '0đ';
           await pushBalanceNotification(userId, {
             kind: 'fund_transfer',
             title: 'Chuyển tiền giữa quỹ',
             message:
-              `Chuyển ${amountLabel} từ "${srcName}" sang "${dstName}".`
-              + (srcBalLabel || dstBalLabel
-                ? `\nSố dư quỹ:\n${srcName}: ${srcBalLabel}\n${dstName}: ${dstBalLabel}\nTổng số dư: ${totalLabel}`
-                : `\nTổng số dư: ${totalLabel}`),
+              `"${srcName}"\n${fmtSigned(-amount)} - Số dư: ${safeSrcBal}\n\n` +
+              `"${dstName}"\n${fmtSigned(amount)} - Số dư: ${safeDstBal}\n\n` +
+              `Tổng số dư: ${totalLabel}`,
           });
         } catch {
           // ignore notification errors
@@ -453,6 +510,10 @@ function useFundsInternal(): FundsContextValue {
       if (!userId || amount <= 0) return false;
 
       try {
+        // Lưu lại số dư cũ/mới để tạo notification + message chính xác.
+        let oldBalance: number | undefined;
+        let newBalance: number | undefined;
+
         await runTransaction(firestoreInstance, async (transaction) => {
           const fundRef = doc(firestoreInstance, COLLECTION_NAME, fundId);
           const fundSnap = await transaction.get(fundRef);
@@ -461,13 +522,62 @@ function useFundsInternal(): FundsContextValue {
           }
 
           const currentBalance = (fundSnap.data()?.balance as number) ?? 0;
-          const newBalance = currentBalance - amount;
+          const newBalanceValue = currentBalance - amount;
+          oldBalance = currentBalance;
+          newBalance = newBalanceValue;
 
           transaction.update(fundRef, {
-            balance: newBalance,
+            balance: newBalanceValue,
             updatedAt: serverTimestamp(),
           });
         });
+
+        showSnackbar({
+          message: `Đã rút ${amount.toLocaleString('vi-VN')}đ khỏi quỹ`,
+          type: 'success',
+        });
+
+        // NotificationsScreen đang render màu theo kind có sẵn,
+        // nên dùng `fund_transfer` để hiển thị điểm màu + lưu record.
+        try {
+          const fundName = getFundName(fundId);
+          const minus = '\u2212';
+          const amountLabel = `${amount.toLocaleString('vi-VN')}đ`;
+          const newLabel =
+            typeof newBalance === 'number' ? `${newBalance.toLocaleString('vi-VN')}đ` : '—';
+
+          // Tính lại tổng số dư sau khi trừ để hiển thị chính xác trên Notifications.
+          let totalAfter: number | undefined;
+          try {
+            const fundsSnap = await getDocs(
+              query(
+                collection(firestoreInstance, COLLECTION_NAME),
+                where('userId', '==', userId),
+              ),
+            );
+            totalAfter = fundsSnap.docs.reduce(
+              (sum: number, d: QueryDoc) =>
+                sum + (((d.data() as any)?.balance as number) ?? 0),
+              0,
+            );
+          } catch {
+            // ignore and fallback below
+          }
+
+          const totalLabel = `${(
+            typeof totalAfter === 'number'
+              ? totalAfter
+              : funds.reduce((sum, f) => sum + (f.balance ?? 0), 0)
+          ).toLocaleString('vi-VN')}đ`;
+
+          await pushBalanceNotification(userId, {
+            kind: 'fund_transfer',
+            title: 'Rút tiền khỏi quỹ',
+            message: `"${fundName}"\n${minus}${amountLabel} - Số dư: ${newLabel}\nTổng số dư: ${totalLabel}`,
+          });
+        } catch {
+          // notification errors không làm hỏng luồng rút
+        }
 
         return true;
       } catch (error) {
@@ -475,7 +585,7 @@ function useFundsInternal(): FundsContextValue {
         throw error;
       }
     },
-    [userId],
+    [userId, funds, getFundName],
   );
 
   const addToFund = useCallback(
@@ -553,13 +663,17 @@ function useFundsInternal(): FundsContextValue {
         try {
           const fundName = fund?.name ?? 'Quỹ';
           const amountLabel = `${balance.toLocaleString('vi-VN')}đ`;
+          const totalBefore = funds.reduce((sum, f) => sum + (f.balance ?? 0), 0);
+          const totalAfter = totalBefore - balance; // nếu có transfer thì tổng sau vẫn giữ nguyên (transferToFund đã xử lý)
+          const totalLabel = `${Math.max(0, totalAfter).toLocaleString('vi-VN')}đ`;
+          const minus = '\u2212';
           await pushBalanceNotification(userId, {
             kind: 'fund_deleted',
             title: 'Xóa quỹ',
             message:
-              balance > 0 && targetFund && !options?.skipTransfer
-                ? `Đã xóa "${fundName}". Đã chuyển ${amountLabel} vào "${targetFund.name}".`
-                : `Đã xóa "${fundName}".`,
+              balance > 0
+                ? `"${fundName}"\n${minus}${balance.toLocaleString('vi-VN')}đ - Số dư: 0đ\nTổng số dư: ${totalLabel}`
+                : `"${fundName}"\nTổng số dư: ${totalLabel}`,
           });
         } catch {
           // ignore notification errors

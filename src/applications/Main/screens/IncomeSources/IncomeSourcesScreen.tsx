@@ -7,6 +7,7 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
+  BackHandler,
 } from 'react-native';
 import Modal from 'react-native-modal';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -20,8 +21,10 @@ import { useFunds } from '../FundManagement/hooks/useFunds';
 import { type IncomePreset } from '../../../../services/incomePresets';
 import type { RootStackParamList } from '../../MainScreen';
 import { showSnackbar } from '../../../../utils/snackbar';
+import { confirm } from '../../../../utils/confirm';
 import { CurrencyInput, SwipeableRow } from '../../../../components';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
+import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 
 type DraftAllocation = { id: string; fundId: string; amount: number };
 
@@ -85,32 +88,46 @@ const IncomeSourcesScreen: React.FC = () => {
     setModalVisible(true);
   };
 
-  const closeModal = () => {
+  const closeModal = useCallback(() => {
     setModalVisible(false);
     setEditingPresetId(null);
     setDraftName('');
     setDraftAllocations([]);
     setActiveDraftAllocationId('');
-  };
+  }, []);
+
+  const exitApp = useCallback(() => {
+    const maybeExit = (BackHandler as any)?.exitApp;
+    if (typeof maybeExit === 'function') maybeExit();
+  }, []);
+
+  useEffect(() => {
+    const onHardwareBackPress = () => {
+      if (modalVisible) {
+        closeModal();
+        return true;
+      }
+
+      if (navigation.canGoBack()) {
+        navigation.goBack();
+        return true;
+      }
+
+      exitApp();
+      return true;
+    };
+
+    const sub = BackHandler.addEventListener(
+      'hardwareBackPress',
+      onHardwareBackPress,
+    );
+
+    return () => sub.remove();
+  }, [navigation, modalVisible, exitApp, closeModal]);
 
   const allocationTotal = useMemo(() => {
     return draftAllocations.reduce((sum, a) => sum + (a.amount || 0), 0);
   }, [draftAllocations]);
-
-  const activeDraft = useMemo(() => {
-    return (
-      draftAllocations.find((a) => a.id === activeDraftAllocationId) ??
-      draftAllocations[0]
-    );
-  }, [draftAllocations, activeDraftAllocationId]);
-
-  const handleSelectFundForActive = (fundId: string) => {
-    const targetId = activeDraft?.id ?? '';
-    if (!targetId) return;
-    setDraftAllocations((prev) =>
-      prev.map((p) => (p.id === targetId ? { ...p, fundId } : p)),
-    );
-  };
 
   const handleSave = async () => {
     const stored = await getStoredUser();
@@ -172,6 +189,15 @@ const IncomeSourcesScreen: React.FC = () => {
     const userId = stored?.uid ?? '';
     if (!userId) return;
 
+    const presetName = presets.find((p) => p.id === presetId)?.name ?? 'nguồn thu';
+    const ok = await confirm({
+      title: 'Xóa cấu hình nguồn thu?',
+      message: `Bạn có chắc muốn xóa cấu hình nguồn thu "${presetName}" không? khi xóa cấu hình nguồn thu, tất cả các giao dịch đã phân bổ theo cấu hình này sẽ không được phân bổ lại.`,
+      confirmText: 'Xóa',
+      cancelText: 'Hủy',
+    });
+    if (!ok) return;
+
     const next = presets.filter((p) => p.id !== presetId);
     await savePresets(next);
     showSnackbar({ type: 'success', message: 'Đã xóa nguồn thu' });
@@ -204,10 +230,16 @@ const IncomeSourcesScreen: React.FC = () => {
                     <View style={styles.allocationLeft}>
                       <View
                         style={[
-                          styles.allocationDot,
-                          { backgroundColor: (fund?.color ?? colors.primary) + '25' },
+                          styles.allocationIconWrap,
+                          { backgroundColor: (fund?.color ?? colors.primary) + '20' },
                         ]}
-                      />
+                      >
+                        {(() => {
+                          const IconComp = getFundIconComponent(fund?.icon);
+                          const c = fund?.color ?? colors.primary;
+                          return <IconComp width={14} height={14} color={c} />;
+                        })()}
+                      </View>
                       <Text style={styles.allocationFund} numberOfLines={1}>
                         {fundName}
                       </Text>
@@ -230,7 +262,10 @@ const IncomeSourcesScreen: React.FC = () => {
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.backBtn}
-          onPress={() => (navigation.canGoBack() ? navigation.goBack() : undefined)}
+          onPress={() => {
+            if (navigation.canGoBack()) navigation.goBack();
+            else exitApp();
+          }}
           activeOpacity={0.8}
         >
           <ChevronLeftIcon width={22} height={22} color={colors.text} />
@@ -250,7 +285,7 @@ const IncomeSourcesScreen: React.FC = () => {
           contentContainerStyle={{ paddingBottom: Math.max(24, insets.bottom + 24) }}
         >
           <Text style={styles.hint}>
-            Tạo “nguồn thu” để tự động phân bổ thu nhập vào nhiều quỹ theo %.
+            Tạo “nguồn thu” để tự động phân bổ thu nhập vào nhiều quỹ
           </Text>
 
           {presets.length === 0 ? (
@@ -283,134 +318,167 @@ const IncomeSourcesScreen: React.FC = () => {
         avoidKeyboard
       >
         <View style={styles.modalContent}>
-          <Text style={styles.modalTitle}>
-            {editingPresetId ? 'Sửa nguồn thu' : 'Tạo nguồn thu'}
-          </Text>
-
-          <Text style={styles.inputLabel}>Tên nguồn thu</Text>
-          <TextInput
-            style={styles.textInput}
-            value={draftName}
-            onChangeText={setDraftName}
-            placeholder="VD: Lương"
-            placeholderTextColor={colors.textLight}
-          />
-
-          <View style={styles.modalSectionHeader}>
-            <Text style={styles.inputLabel}>Phân bổ theo quỹ (đ)</Text>
-            <Text
-              style={[
-                styles.percentTotal,
-                allocationTotal > 0 ? styles.percentOk : styles.percentBad,
-              ]}
-            >
-              {allocationTotal.toLocaleString('vi-VN')}đ
+          <ScrollView
+            style={styles.modalBody}
+            contentContainerStyle={styles.modalBodyContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.modalTitle}>
+              {editingPresetId ? 'Sửa nguồn thu' : 'Tạo nguồn thu'}
             </Text>
-          </View>
 
-          {draftAllocations.map((a) => {
-            const isActive = a.id === activeDraftAllocationId;
-            const fundName = funds.find((f) => f.id === a.fundId)?.name ?? 'Chọn quỹ';
-            return (
-              <View key={a.id} style={styles.draftRow}>
-                <View style={styles.draftHeaderRow}>
-                  <TouchableOpacity
-                    style={[styles.draftFund, isActive && styles.draftFundActive]}
-                    onPress={() => setActiveDraftAllocationId(a.id)}
-                    activeOpacity={0.85}
-                  >
-                    <Text
-                      style={[styles.draftFundText, isActive && styles.draftFundTextActive]}
-                      numberOfLines={1}
-                    >
-                      {fundName}
-                    </Text>
-                  </TouchableOpacity>
-                  {draftAllocations.length > 1 && (
+            <Text style={styles.inputLabel}>Tên nguồn thu</Text>
+            <TextInput
+              style={styles.textInput}
+              value={draftName}
+              onChangeText={setDraftName}
+              placeholder="VD: Lương"
+              placeholderTextColor={colors.textLight}
+            />
+
+            <View style={styles.modalSectionHeader}>
+              <Text style={styles.inputLabel}>Phân bổ theo quỹ (đ)</Text>
+              <Text
+                style={[
+                  styles.percentTotal,
+                  allocationTotal > 0 ? styles.percentOk : styles.percentBad,
+                ]}
+              >
+                {allocationTotal.toLocaleString('vi-VN')}đ
+              </Text>
+            </View>
+
+            {draftAllocations.map((a) => {
+              const isActive = a.id === activeDraftAllocationId;
+              const selectedFund = funds.find((f) => f.id === a.fundId);
+              const fundName = selectedFund?.name ?? 'Chọn quỹ';
+              const selectedColor = selectedFund?.color ?? colors.primary;
+              return (
+                <View key={a.id} style={styles.draftRow}>
+                  <View style={styles.draftHeaderRow}>
                     <TouchableOpacity
-                      style={styles.removeBtn}
-                      onPress={() => {
-                        setDraftAllocations((prev) => {
-                          const next = prev.filter((p) => p.id !== a.id);
-                          if (activeDraftAllocationId === a.id) {
-                            setActiveDraftAllocationId(next[0]?.id ?? '');
-                          }
-                          return next;
-                        });
-                      }}
+                      style={[styles.draftFund, isActive && styles.draftFundActive]}
+                      onPress={() =>
+                        setActiveDraftAllocationId((prev) => (prev === a.id ? '' : a.id))
+                      }
                       activeOpacity={0.85}
                     >
-                      <Text style={styles.removeText}>✕</Text>
+                      <View style={styles.draftFundContent}>
+                        {selectedFund ? (
+                          <View style={[styles.draftFundIconWrap, { backgroundColor: selectedColor + '20' }]}>
+                            {(() => {
+                              const IconComp = getFundIconComponent(selectedFund.icon);
+                              return <IconComp width={16} height={16} color={selectedColor} />;
+                            })()}
+                          </View>
+                        ) : null}
+                        <Text
+                          style={[styles.draftFundText, isActive && styles.draftFundTextActive]}
+                          numberOfLines={1}
+                        >
+                          {fundName}
+                        </Text>
+                      </View>
                     </TouchableOpacity>
-                  )}
-                </View>
-                <View style={styles.draftPercentWrap}>
-                  <CurrencyInput
-                    value={a.amount}
-                    onChange={(v) => {
-                      setDraftAllocations((prev) =>
-                        prev.map((p) => (p.id === a.id ? { ...p, amount: v } : p)),
-                      );
-                    }}
-                    placeholder="0"
-                    inputWrapperStyle={styles.amountInput}
-                    inputStyle={styles.amountText}
-                    suffixStyle={styles.amountSuffix}
-                  />
-                </View>
-              </View>
-            );
-          })}
-
-          <View style={styles.modalActionsRow}>
-            <TouchableOpacity
-              style={styles.addAllocationBtn}
-              onPress={() => {
-                const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-                setDraftAllocations((prev) => [...prev, { id, fundId: '', amount: 0 }]);
-                setActiveDraftAllocationId(id);
-              }}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.addAllocationText}>+ Thêm quỹ</Text>
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.fundPickRow}
-          >
-            {fundsDefaultFirst.map((f) => {
-              const usedByOther = draftAllocations.some(
-                (a) => a.fundId === f.id && a.id !== (activeDraft?.id ?? ''),
-              );
-              const disabled = usedByOther;
-              const isSelected = (activeDraft?.fundId ?? '') === f.id;
-              const c = f.color ?? colors.primary;
-              return (
-                <TouchableOpacity
-                  key={f.id}
-                  style={[
-                    styles.fundPickItem,
-                    isSelected && { borderColor: c },
-                    disabled && { opacity: 0.5 },
-                  ]}
-                  onPress={() => {
-                    if (disabled) return;
-                    handleSelectFundForActive(f.id);
-                  }}
-                  activeOpacity={0.75}
-                >
-                  <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                    <WalletIcon width={18} height={18} color={c} />
+                    {draftAllocations.length > 1 && (
+                      <TouchableOpacity
+                        style={styles.removeBtn}
+                        onPress={() => {
+                          setDraftAllocations((prev) => {
+                            const next = prev.filter((p) => p.id !== a.id);
+                            if (activeDraftAllocationId === a.id) {
+                              setActiveDraftAllocationId(next[0]?.id ?? '');
+                            }
+                            return next;
+                          });
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={styles.removeText}>✕</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
-                  <Text style={[styles.fundPickText, isSelected && { color: c }]} numberOfLines={1}>
-                    {f.name}
-                  </Text>
-                </TouchableOpacity>
+                  {isActive && (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.inlineFundPickRow}
+                      keyboardShouldPersistTaps="handled"
+                    >
+                      {fundsDefaultFirst.map((f) => {
+                        const usedByOther = draftAllocations.some(
+                          (x) => x.fundId === f.id && x.id !== a.id,
+                        );
+                        const disabled = usedByOther;
+                        const isSelected = (a.fundId ?? '') === f.id;
+                        const c = f.color ?? colors.primary;
+                        return (
+                          <TouchableOpacity
+                            key={`${a.id}_${f.id}`}
+                            style={[
+                              styles.fundPickItem,
+                              isSelected && { borderColor: c },
+                              disabled && { opacity: 0.5 },
+                            ]}
+                            onPress={() => {
+                              if (disabled) return;
+                              setDraftAllocations((prev) =>
+                                prev.map((p) => (p.id === a.id ? { ...p, fundId: f.id } : p)),
+                              );
+                              // Chọn xong thì đóng list quỹ
+                              setActiveDraftAllocationId('');
+                            }}
+                            activeOpacity={0.75}
+                          >
+                            <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
+                              {(() => {
+                                const IconComp = getFundIconComponent(f.icon);
+                                return <IconComp width={18} height={18} color={c} />;
+                              })()}
+                            </View>
+                            <Text
+                              style={[styles.fundPickText, isSelected && { color: c }]}
+                              numberOfLines={1}
+                            >
+                              {f.name}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  )}
+                  <View style={styles.draftPercentWrap}>
+                    <CurrencyInput
+                      value={a.amount}
+                      onChange={(v) => {
+                        setDraftAllocations((prev) =>
+                          prev.map((p) => (p.id === a.id ? { ...p, amount: v } : p)),
+                        );
+                      }}
+                      placeholder="0"
+                      inputWrapperStyle={styles.amountInput}
+                      inputStyle={styles.amountText}
+                      suffixStyle={styles.amountSuffix}
+                    />
+                  </View>
+                </View>
               );
             })}
+
+            <View style={styles.modalActionsRow}>
+              <TouchableOpacity
+                style={styles.addAllocationBtn}
+                onPress={() => {
+                  const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+                  setDraftAllocations((prev) => [...prev, { id, fundId: '', amount: 0 }]);
+                  setActiveDraftAllocationId(id);
+                }}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.addAllocationText}>+ Thêm quỹ</Text>
+              </TouchableOpacity>
+            </View>
           </ScrollView>
 
           <View style={styles.modalButtons}>
@@ -488,7 +556,7 @@ const styles = StyleSheet.create({
   allocations: { marginTop: 12, gap: 8 },
   allocationRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   allocationLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, paddingRight: 10 },
-  allocationDot: { width: 10, height: 10, borderRadius: 5 },
+  allocationIconWrap: { width: 18, height: 18, borderRadius: 9, justifyContent: 'center', alignItems: 'center' },
   allocationFund: { flex: 1, fontSize: 13, fontWeight: '700', color: colors.textSecondary },
   allocationPercent: { fontSize: 13, fontWeight: '900', color: colors.text },
   footer: { paddingHorizontal: 16, paddingTop: 10, backgroundColor: colors.background },
@@ -507,6 +575,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 14,
     paddingBottom: 16,
+    maxHeight: '88%',
+  },
+  modalBody: { flexGrow: 0 },
+  modalBodyContent: {
+    paddingBottom: 10,
     gap: 10,
   },
   modalTitle: { fontSize: 16, fontWeight: '900', color: colors.text, marginBottom: 4 },
@@ -547,6 +620,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  draftFundContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  draftFundIconWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   draftFundActive: { borderWidth: 2, borderColor: colors.primary },
   draftFundText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
   draftFundTextActive: { color: colors.primary },
@@ -582,6 +667,7 @@ const styles = StyleSheet.create({
   },
   addAllocationText: { color: colors.primary, fontWeight: '800', fontSize: 13 },
   fundPickRow: { gap: 10, paddingVertical: 8 },
+  inlineFundPickRow: { gap: 10, paddingVertical: 8 },
   fundPickItem: {
     minWidth: 92,
     backgroundColor: colors.white,

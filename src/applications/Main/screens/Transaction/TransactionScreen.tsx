@@ -28,6 +28,7 @@ import type { RootStackParamList } from '../../MainScreen';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import { useFunds } from '../FundManagement/hooks/useFunds';
+import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 
 interface TransactionViewItem {
   id: string;
@@ -473,7 +474,7 @@ const TransactionScreen: React.FC = () => {
           <View style={styles.transactionRight}>
             <Text style={[
               styles.transactionAmount,
-              { color: item.type === 'income' ? colors.success : colors.text }
+              { color: item.type === 'income' ? colors.success : colors.error }
             ]}>
               {formatAmount(item.amount, item.type)}
             </Text>
@@ -704,18 +705,26 @@ const TransactionScreen: React.FC = () => {
                             },
                           ]}
                         >
-                          <Text
-                            style={[
-                              styles.adjustFundName,
-                              isSelected && { color: fundColor, fontWeight: '800' },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {fund.name}
-                          </Text>
-                          <Text style={styles.adjustFundBalance}>
-                            {currentBalance.toLocaleString('vi-VN')}đ
-                          </Text>
+                          <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
+                            {(() => {
+                              const FundIcon = getFundIconComponent(fund.icon);
+                              return <FundIcon width={18} height={18} color={fundColor} />;
+                            })()}
+                          </View>
+                          <View style={styles.adjustFundTextCol}>
+                            <Text
+                              style={[
+                                styles.adjustFundName,
+                                isSelected && { color: fundColor, fontWeight: '800' },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {fund.name}
+                            </Text>
+                            <Text style={styles.adjustFundBalance}>
+                              {currentBalance.toLocaleString('vi-VN')}đ
+                            </Text>
+                          </View>
                         </TouchableOpacity>
                       );
                     })
@@ -876,21 +885,29 @@ const TransactionScreen: React.FC = () => {
                       (!canUse || adjustDeficit <= 0) && styles.adjustFundItemDisabled,
                     ]}
                   >
-                    <Text
-                      style={[
-                        styles.adjustFundName,
-                        isSelected && { color: fundColor, fontWeight: '800' },
-                      ]}
-                      numberOfLines={1}
-                    >
-                      {fund.name}
-                    </Text>
-                    <Text style={styles.adjustFundBalance}>
-                      {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
-                    </Text>
-                    {!canUse && (
-                      <Text style={styles.adjustFundHint}>Không đủ số dư</Text>
-                    )}
+                    <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
+                      {(() => {
+                        const FundIcon = getFundIconComponent(fund.icon);
+                        return <FundIcon width={18} height={18} color={fundColor} />;
+                      })()}
+                    </View>
+                    <View style={styles.adjustFundTextCol}>
+                      <Text
+                        style={[
+                          styles.adjustFundName,
+                          isSelected && { color: fundColor, fontWeight: '800' },
+                        ]}
+                        numberOfLines={1}
+                      >
+                        {fund.name}
+                      </Text>
+                      <Text style={styles.adjustFundBalance}>
+                        {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
+                      </Text>
+                      {!canUse && (
+                        <Text style={styles.adjustFundHint}>Không đủ số dư</Text>
+                      )}
+                    </View>
                   </TouchableOpacity>
                 );
               })}
@@ -1102,18 +1119,26 @@ const TransactionScreen: React.FC = () => {
                             isSelected && { borderColor: fundColor, backgroundColor: fundColor + '10' },
                           ]}
                         >
-                          <Text
-                            style={[
-                              styles.adjustFundName,
-                              isSelected && { color: fundColor, fontWeight: '800' },
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {fund.name}
-                          </Text>
-                          <Text style={styles.adjustFundBalance}>
-                            {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
-                          </Text>
+                          <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
+                            {(() => {
+                              const FundIcon = getFundIconComponent(fund.icon);
+                              return <FundIcon width={18} height={18} color={fundColor} />;
+                            })()}
+                          </View>
+                          <View style={styles.adjustFundTextCol}>
+                            <Text
+                              style={[
+                                styles.adjustFundName,
+                                isSelected && { color: fundColor, fontWeight: '800' },
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {fund.name}
+                            </Text>
+                            <Text style={styles.adjustFundBalance}>
+                              {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
+                            </Text>
+                          </View>
                         </TouchableOpacity>
                       );
                     })}
@@ -1813,15 +1838,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.backgroundSecondary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    gap: 10,
   },
   adjustFundItemDisabled: {
     opacity: 0.5,
+  },
+  adjustFundIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.backgroundSecondary,
+  },
+  adjustFundTextCol: {
+    flex: 1,
+    flexDirection: 'column',
+    justifyContent: 'center',
   },
   adjustFundName: {
     fontSize: 13,
     fontWeight: '700',
     color: colors.text,
-    marginBottom: 4,
+    flex: 1,
   },
   adjustFundBalance: {
     fontSize: 12,

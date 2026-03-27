@@ -4,6 +4,7 @@ export interface FundRecord {
   name: string;
   balance: number;
   color?: string;
+  icon?: string | null;
   isDefault?: boolean;
   createdAt?: Date;
   updatedAt?: Date;

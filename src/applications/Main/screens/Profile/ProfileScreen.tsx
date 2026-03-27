@@ -9,6 +9,7 @@ import {
   Image,
   ActivityIndicator,
 } from 'react-native';
+import LinearGradient from 'react-native-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -144,33 +145,43 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
         </View>
 
         {/* Profile Card */}
-        <View style={styles.profileCard}>
-          <View style={styles.profileCover} />
-          <View style={styles.profileBody}>
-            <View style={styles.avatar}>
-              {user?.photoURL ? (
-                <Image
-                  source={{ uri: user.photoURL }}
-                  style={styles.avatarImage}
-                />
+        <LinearGradient
+          colors={['#F39B62', '#EE7F43', '#DD6428']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.profileCard}
+        >
+          <View style={styles.profileCircle1} />
+          <View style={styles.profileCircle2} />
+          <View style={styles.profilePattern} />
+
+          <View style={styles.profileCardContent}>
+            <View style={styles.profileBody}>
+              <View style={styles.avatar}>
+                {user?.photoURL ? (
+                  <Image
+                    source={{ uri: user.photoURL }}
+                    style={styles.avatarImage}
+                  />
+                ) : (
+                  <UserIcon width={44} height={44} color={colors.white} />
+                )}
+              </View>
+              {isLoadingUser ? (
+                <ActivityIndicator color={colors.white} />
               ) : (
-                <UserIcon width={44} height={44} color={colors.white} />
+                <>
+                  <Text style={styles.userName}>
+                    {user?.displayName || 'Người dùng'}
+                  </Text>
+                  {!!user?.email && (
+                    <Text style={styles.userEmail}>{user.email}</Text>
+                  )}
+                </>
               )}
             </View>
-            {isLoadingUser ? (
-              <ActivityIndicator color={colors.primary} />
-            ) : (
-              <>
-                <Text style={styles.userName}>
-                  {user?.displayName || 'Người dùng'}
-                </Text>
-                {!!user?.email && (
-                  <Text style={styles.userEmail}>{user.email}</Text>
-                )}
-              </>
-            )}
           </View>
-        </View>
+        </LinearGradient>
 
         {/* Menu Section */}
         <View style={styles.section}>
@@ -275,7 +286,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   profileCard: {
-    backgroundColor: colors.white,
     marginHorizontal: 20,
     borderRadius: 20,
     shadowColor: '#000',
@@ -284,17 +294,45 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 4,
     overflow: 'hidden',
+    paddingHorizontal: 22,
+    paddingTop: 18,
+    paddingBottom: 20,
   },
-  profileCover: {
-    height: 74,
-    backgroundColor: colors.primary,
-    opacity: 0.12,
+  profileCircle1: {
+    position: 'absolute',
+    top: -40,
+    right: -40,
+    width: 160,
+    height: 160,
+    borderRadius: 80,
+    backgroundColor: 'rgba(255,255,255,0.16)',
+  },
+  profileCircle2: {
+    position: 'absolute',
+    top: 14,
+    right: 22,
+    width: 110,
+    height: 110,
+    borderRadius: 55,
+    backgroundColor: 'rgba(255,255,255,0.10)',
+  },
+  profilePattern: {
+    position: 'absolute',
+    bottom: -34,
+    left: -30,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+  },
+  profileCardContent: {
+    zIndex: 1,
   },
   profileBody: {
     alignItems: 'center',
     paddingHorizontal: 24,
     paddingBottom: 20,
-    marginTop: -36,
+    marginTop: 0,
   },
   avatar: {
     width: 84,
@@ -315,12 +353,12 @@ const styles = StyleSheet.create({
   userName: {
     fontSize: 20,
     fontWeight: 'bold',
-    color: colors.text,
+    color: colors.white,
     marginBottom: 4,
   },
   userEmail: {
     fontSize: 14,
-    color: colors.textSecondary,
+    color: 'rgba(255,255,255,0.85)',
   },
   section: {
     marginTop: 24,

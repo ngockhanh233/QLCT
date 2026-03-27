@@ -265,11 +265,42 @@ export const useTransactions = () => {
 
         let fundName: string | undefined;
         let newBalanceAfter: number | undefined;
+        let splitRefundFundIdForNote: string | undefined;
+        let splitTotalDeficitForNote = 0;
+        const splitDeficitByFundIdForNote: Record<string, number> = {};
         const fundChangeSummaries: {
+          fundId?: string;
           name: string;
           delta: number;
           newBalance: number;
         }[] = [];
+        const upsertFundChangeSummary = (
+          fundId: string | undefined,
+          name: string,
+          delta: number,
+          newBalance: number,
+        ) => {
+          const idx = fundChangeSummaries.findIndex((x) =>
+            fundId ? x.fundId === fundId : x.name === name,
+          );
+          if (idx >= 0) {
+            fundChangeSummaries[idx] = {
+              ...fundChangeSummaries[idx],
+              fundId: fundChangeSummaries[idx].fundId ?? fundId,
+              name,
+              delta: fundChangeSummaries[idx].delta + delta,
+              // newBalance cuối cùng sau tất cả điều chỉnh trong transaction
+              newBalance,
+            };
+            return;
+          }
+          fundChangeSummaries.push({
+            fundId,
+            name,
+            delta,
+            newBalance,
+          });
+        };
 
         await runTransaction(firestoreInstance, async (transaction) => {
           const skipFundChange = opts?.skipFundChange === true;
@@ -285,6 +316,7 @@ export const useTransactions = () => {
             // - Quỹ nào đủ tiền: trừ đúng số đã nhận.
             // - Quỹ nào không đủ: trừ hết (về 0), phần thiếu dồn về quỹ bù (refundFundId).
             const refundFundId = (opts?.refundFundId ?? undefined) || undefined;
+            splitRefundFundIdForNote = refundFundId;
 
             // Tính tổng phần thiếu cần trừ thêm ở quỹ bù.
             let totalDeficit = 0;
@@ -308,9 +340,13 @@ export const useTransactions = () => {
                 if (!refundFundId) {
                   throw new Error('Số dư quỹ không đủ để xóa khoản thu này');
                 }
-                totalDeficit += s.amount - currentBalance;
+                const deficit = s.amount - currentBalance;
+                splitDeficitByFundIdForNote[s.fundId] =
+                  (splitDeficitByFundIdForNote[s.fundId] ?? 0) + deficit;
+                totalDeficit += deficit;
               }
             }
+            splitTotalDeficitForNote = totalDeficit;
 
             let refundBalance = 0;
             let refundRef: FirebaseFirestoreTypes.DocumentReference | null = null;
@@ -345,24 +381,32 @@ export const useTransactions = () => {
               });
 
               const nextBalance = currentBalance - amountFromOwnFund;
+              fundBalances[s.fundId] = nextBalance;
               newBalanceAfter = nextBalance;
               if (!fundName) {
                 fundName = fundNames[s.fundId] ?? fundName;
               }
-              fundChangeSummaries.push({
-                name: fundNames[s.fundId] ?? 'Quỹ',
-                delta: -amountFromOwnFund,
-                newBalance: nextBalance,
-              });
+              upsertFundChangeSummary(
+                s.fundId,
+                fundNames[s.fundId] ?? 'Quỹ',
+                -amountFromOwnFund,
+                nextBalance,
+              );
             }
 
             // Trừ phần thiếu khỏi quỹ bù (nếu có).
             if (totalDeficit > 0 && refundRef) {
+              // Nếu quỹ bù cũng đã bị trừ ở bước trên, dùng số dư mới nhất sau bước đó.
+              const refundBalanceBeforeDeficit =
+                (refundFundId ? fundBalances[refundFundId] : undefined) ?? refundBalance;
               transaction.update(refundRef, {
                 balance: increment(-totalDeficit),
                 updatedAt: serverTimestamp(),
               });
-              const nextBalance = refundBalance - totalDeficit;
+              const nextBalance = refundBalanceBeforeDeficit - totalDeficit;
+              if (refundFundId) {
+                fundBalances[refundFundId] = nextBalance;
+              }
               newBalanceAfter = nextBalance;
               const refundSnap = await transaction.get(refundRef);
               const refundData = refundSnap.data() as any;
@@ -371,11 +415,12 @@ export const useTransactions = () => {
               if (!fundName) {
                 fundName = refundName;
               }
-              fundChangeSummaries.push({
-                name: refundName,
-                delta: -totalDeficit,
-                newBalance: nextBalance,
-              });
+              upsertFundChangeSummary(
+                refundFundId,
+                refundName,
+                -totalDeficit,
+                nextBalance,
+              );
             }
           } else {
             const targetFundId =
@@ -384,7 +429,7 @@ export const useTransactions = () => {
             if (targetFundId && amount > 0) {
               const fundRef = doc(firestoreInstance, 'funds', targetFundId);
               const fundSnap = await transaction.get(fundRef);
-              if (fundSnap.exists) {
+              if (fundSnap.exists()) {
                 fundName = (fundSnap.data()?.name as string | undefined) ?? fundName;
                 const currentBalance = (fundSnap.data()?.balance as number) ?? 0;
 
@@ -426,7 +471,8 @@ export const useTransactions = () => {
               ),
             );
             totalAfter = fundsSnap.docs.reduce(
-              (sum, d) => sum + (((d.data() as any)?.balance as number) ?? 0),
+              (sum: number, d: QueryDoc) =>
+                sum + (((d.data() as any)?.balance as number) ?? 0),
               0,
             );
           } catch {
@@ -439,15 +485,21 @@ export const useTransactions = () => {
             categoryId && (type === 'income' || type === 'expense')
               ? getCategoryInfo(categoryId, type as any).name
               : 'Danh mục';
-          const fundBalanceLine =
+          const minus = '\u2212';
+          const fundDelta = !isSplitIncome ? (type === 'expense' ? amount : -amount) : 0;
+          const fundBalanceBlock =
             typeof newBalanceAfter === 'number' && !isSplitIncome
-              ? `Số dư quỹ: ${newBalanceAfter.toLocaleString('vi-VN')}đ`
+              ? `"${name}"\n${
+                fundDelta >= 0
+                  ? `+${Math.abs(fundDelta).toLocaleString('vi-VN')}đ`
+                  : `${minus}${Math.abs(fundDelta).toLocaleString('vi-VN')}đ`
+              } - Số dư: ${newBalanceAfter.toLocaleString('vi-VN')}đ`
               : '';
           const totalLine =
             typeof totalAfter === 'number'
               ? `Tổng số dư: ${totalAfter.toLocaleString('vi-VN')}đ`
               : '';
-          const baseLines = [fundBalanceLine, totalLine].filter(Boolean).join('\n');
+          const baseLines = [fundBalanceBlock, totalLine].filter(Boolean).join('\n');
 
           const skipFundChange = opts?.skipFundChange === true;
 
@@ -457,26 +509,47 @@ export const useTransactions = () => {
               title: 'Xóa giao dịch',
               message:
                 type === 'expense'
-                  ? `Đã xóa khoản chi ${amountLabel} (${categoryName}). Giao dịch này bị xóa nhưng không thay đổi số dư quỹ.${totalLine ? `\n${totalLine}` : ''}`
-                  : `Đã xóa khoản thu ${amountLabel} (${categoryName}). Giao dịch này bị xóa nhưng không thay đổi số dư quỹ.${totalLine ? `\n${totalLine}` : ''}`,
+                  ? `Đã xóa khoản chi ${amountLabel} (${categoryName}). Giao dịch này bị xóa nhưng không thay đổi số dư quỹ của "${name}".${totalLine ? `\n${totalLine}` : ''}`
+                  : `Đã xóa khoản thu ${amountLabel} (${categoryName}). Giao dịch này bị xóa nhưng không thay đổi số dư quỹ của "${name}".${totalLine ? `\n${totalLine}` : ''}`,
             });
           } else if (isSplitIncome && fundChangeSummaries.length > 0) {
-            const detailLines = fundChangeSummaries
-              .map(fc => {
-                const deltaLabel = fc.delta.toLocaleString('vi-VN');
-                const sign = fc.delta > 0 ? '+' : '';
-                const newBalLabel = fc.newBalance.toLocaleString('vi-VN');
-                return `- "${fc.name}": ${sign}${deltaLabel}đ (mới: ${newBalLabel}đ)`;
-              })
-              .join('\n');
+            // MINUS SIGN (U+2212): tránh nhầm với gạch đầu dòng khi xuống dòng.
+            const minus = '\u2212';
+            const fmtSigned = (n: number) => {
+              const abs = Math.abs(n).toLocaleString('vi-VN');
+              if (n > 0) return `+${abs}`;
+              if (n < 0) return `${minus}${abs}`;
+              return abs;
+            };
+            const detailBlocks = fundChangeSummaries.map(fc => {
+              const newBalLabel = fc.newBalance.toLocaleString('vi-VN');
+              const lines: string[] = [`"${fc.name}"`];
+              lines.push(`${fmtSigned(fc.delta)}đ - Số dư: ${newBalLabel}đ`);
+              if (
+                splitRefundFundIdForNote &&
+                fc.fundId === splitRefundFundIdForNote &&
+                splitTotalDeficitForNote > 0
+              ) {
+                lines.push(`↳ Cấn bù: trừ ${splitTotalDeficitForNote.toLocaleString('vi-VN')}đ`);
+              }
+              const deficit = fc.fundId
+                ? (splitDeficitByFundIdForNote[fc.fundId] ?? 0)
+                : 0;
+              if (deficit > 0) {
+                lines.push(`↳ Thiếu: ${deficit.toLocaleString('vi-VN')}đ`);
+              }
+              return lines.join('\n');
+            });
+
+            const detailText = detailBlocks.join('\n\n');
 
             await pushBalanceNotification(userId, {
               kind: 'transaction_deleted',
               title: 'Xóa giao dịch',
               message:
                 `Đã xóa khoản thu ${amountLabel} (${categoryName}) đã chia vào nhiều quỹ.` +
-                `\nBiến động số dư quỹ:\n${detailLines}` +
-                (baseLines ? `\n${baseLines}` : ''),
+                `\n\nBiến động số dư quỹ:\n\n${detailText}` +
+                (baseLines ? `\n\n${baseLines}` : ''),
             });
           } else {
             await pushBalanceNotification(userId, {

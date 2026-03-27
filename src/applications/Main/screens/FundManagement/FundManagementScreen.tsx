@@ -24,6 +24,11 @@ import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../MainScreen';
 import type { FundRecord } from '../../../../types/fund';
+import {
+  DEFAULT_FUND_ICON_ID,
+  FUND_ICON_OPTIONS,
+  getFundIconComponent,
+} from '../../../../constants/FundIconConstants';
 
 const FUND_COLORS = [
   '#FF6B35',
@@ -69,6 +74,7 @@ const FundManagementScreen: React.FC = () => {
   const [fundName, setFundName] = useState('');
   const [fundBalance, setFundBalance] = useState(0);
   const [fundColor, setFundColor] = useState(FUND_COLORS[0]);
+  const [fundIconId, setFundIconId] = useState<string>(DEFAULT_FUND_ICON_ID);
   const [topUpModalVisible, setTopUpModalVisible] = useState(false);
   const [topUpFundItem, setTopUpFundItem] = useState<FundRecord | null>(null);
   const [topUpAmount, setTopUpAmount] = useState(0);
@@ -108,6 +114,7 @@ const FundManagementScreen: React.FC = () => {
     setFundBalance(0);
     setNewFundSourceId(defaultFund?.id ?? '');
     setFundColor(FUND_COLORS[0]);
+    setFundIconId(DEFAULT_FUND_ICON_ID);
     setUseSourceFundForInitial(true);
     setModalVisible(true);
   };
@@ -117,6 +124,7 @@ const FundManagementScreen: React.FC = () => {
     setFundName(fund.name);
     setFundBalance(fund.balance);
     setFundColor(fund.color ?? FUND_COLORS[0]);
+    setFundIconId(fund.icon ?? DEFAULT_FUND_ICON_ID);
     setModalVisible(true);
   };
 
@@ -168,11 +176,11 @@ const FundManagementScreen: React.FC = () => {
     setIsSaving(true);
     try {
       if (editingFund) {
-        await updateFund(editingFund.id, { name, color: fundColor });
+        await updateFund(editingFund.id, { name, color: fundColor, icon: fundIconId });
         setModalVisible(false);
       } else {
         const initialBalance = useSourceFundForInitial ? 0 : fundBalance;
-        const newId = await createFund(name, initialBalance, fundColor);
+        const newId = await createFund(name, initialBalance, fundColor, false, fundIconId);
         if (newId) {
           if (useSourceFundForInitial && fundBalance > 0 && newFundSourceId) {
             const ok = await transferToFund(newId, fundBalance, newFundSourceId);
@@ -258,6 +266,11 @@ const FundManagementScreen: React.FC = () => {
         ok = await deductFromFund(withdrawFundItem.id, withdrawAmount);
       }
       if (ok) {
+        // Trường hợp rút nhưng không chuyển sang quỹ khác (`deductFromFund`)
+        // cần refresh lại danh sách quỹ để UI cập nhật số dư.
+        if (!useTargetFundForWithdraw) {
+          await refresh();
+        }
         setWithdrawModalVisible(false);
         setWithdrawFundItem(null);
         setWithdrawAmount(0);
@@ -402,11 +415,16 @@ const FundManagementScreen: React.FC = () => {
                         { backgroundColor: (fund.color ?? colors.primary) + '20' },
                       ]}
                     >
-                      <WalletIcon
-                        width={24}
-                        height={24}
-                        color={fund.color ?? colors.primary}
-                      />
+                      {(() => {
+                        const FundIcon = getFundIconComponent(fund.icon);
+                        return (
+                          <FundIcon
+                            width={24}
+                            height={24}
+                            color={fund.color ?? colors.primary}
+                          />
+                        );
+                      })()}
                     </View>
                     <View style={styles.fundInfo}>
                       <View style={styles.fundNameRow}>
@@ -590,7 +608,10 @@ const FundManagementScreen: React.FC = () => {
                                   { backgroundColor: fColor + '20' },
                                 ]}
                               >
-                                <WalletIcon width={18} height={18} color={fColor} />
+                              {(() => {
+                                const FundIcon = getFundIconComponent(fund.icon);
+                                return <FundIcon width={18} height={18} color={fColor} />;
+                              })()}
                               </View>
                               <Text
                                 style={[
@@ -879,7 +900,10 @@ const FundManagementScreen: React.FC = () => {
                                 { backgroundColor: fColor + '20' },
                               ]}
                             >
-                              <WalletIcon width={20} height={20} color={fColor} />
+                                {(() => {
+                                  const FundIcon = getFundIconComponent(fund.icon);
+                                  return <FundIcon width={20} height={20} color={fColor} />;
+                                })()}
                             </View>
                             <Text
                               style={[
@@ -925,6 +949,40 @@ const FundManagementScreen: React.FC = () => {
                     activeOpacity={0.8}
                   />
                 ))}
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>Icon quỹ</Text>
+              <View style={styles.fundIconPicker}>
+                {FUND_ICON_OPTIONS.map((opt) => {
+                  const isSelected = fundIconId === opt.id;
+                  const IconComp = opt.icon;
+                  return (
+                    <TouchableOpacity
+                      key={opt.id}
+                      style={[
+                        styles.fundIconOption,
+                        isSelected && styles.fundIconOptionSelected,
+                      ]}
+                      onPress={() => setFundIconId(opt.id)}
+                      activeOpacity={0.8}
+                    >
+                      <View
+                        style={[
+                          styles.fundIconOptionInner,
+                          { borderColor: (fundColor ?? colors.primary) + (isSelected ? '55' : '20') },
+                        ]}
+                      >
+                        <IconComp
+                          width={20}
+                          height={20}
+                          color={isSelected ? fundColor : colors.textSecondary}
+                        />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </View>
 
@@ -1022,7 +1080,10 @@ const FundManagementScreen: React.FC = () => {
                       activeOpacity={0.7}
                     >
                       <View style={[styles.sourceFundIcon, { backgroundColor: fundColor + '20' }]}>
-                        <WalletIcon width={18} height={18} color={fundColor} />
+                        {(() => {
+                          const FundIcon = getFundIconComponent(fund.icon);
+                          return <FundIcon width={18} height={18} color={fundColor} />;
+                        })()}
                       </View>
                       <Text
                         style={[styles.sourceFundText, isSelected && { color: fundColor }]}
@@ -1131,7 +1192,10 @@ const FundManagementScreen: React.FC = () => {
                       activeOpacity={0.7}
                     >
                       <View style={[styles.sourceFundIcon, { backgroundColor: fundColor + '20' }]}>
-                        <WalletIcon width={18} height={18} color={fundColor} />
+                        {(() => {
+                          const FundIcon = getFundIconComponent(fund.icon);
+                          return <FundIcon width={18} height={18} color={fundColor} />;
+                        })()}
                       </View>
                       <Text
                         style={[styles.sourceFundText, isSelected && { color: fundColor }]}
@@ -1584,6 +1648,39 @@ const styles = StyleSheet.create({
   colorOptionSelected: {
     borderColor: colors.text,
     borderWidth: 3,
+  },
+  fundIconPicker: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingTop: 6,
+    paddingBottom: 2,
+    flexWrap: 'wrap',
+    justifyContent: 'space-around',
+  },
+  fundIconOption: {
+    padding: 6,
+    borderRadius: 999,
+    backgroundColor: colors.backgroundSecondary,
+    borderWidth: 1,
+    borderColor: 'transparent',
+    width: 52,
+    height: 52,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fundIconOptionSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + '15',
+  },
+  fundIconOptionInner: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
   },
   modalButtons: {
     flexDirection: 'row',

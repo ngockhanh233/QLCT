@@ -86,35 +86,33 @@ export const SnackbarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   return (
     <>
       {children}
-      {state.visible && (
-        <Animated.View
+      <Animated.View
+        style={[
+          styles.wrapper,
+          {
+            opacity,
+            transform: [{ translateY }],
+          },
+        ]}
+        pointerEvents={state.visible ? 'auto' : 'none'}
+      >
+        <View
           style={[
-            styles.wrapper,
-            {
-              opacity,
-              transform: [{ translateY }],
-            },
+            styles.snackbar,
+            { backgroundColor: theme.background },
           ]}
-          pointerEvents="box-none"
         >
-          <View
+          <Text
             style={[
-              styles.snackbar,
-              { backgroundColor: theme.background },
+              styles.message,
+              { color: theme.text },
             ]}
+            numberOfLines={2}
           >
-            <Text
-              style={[
-                styles.message,
-                { color: theme.text },
-              ]}
-              numberOfLines={2}
-            >
-              {state.message}
-            </Text>
-          </View>
-        </Animated.View>
-      )}
+            {state.message}
+          </Text>
+        </View>
+      </Animated.View>
     </>
   );
 };
@@ -127,6 +125,9 @@ const styles = StyleSheet.create({
     bottom: 24,
     alignItems: 'center',
     justifyContent: 'center',
+    // Ensure snackbar appears above react-native-modal overlays.
+    zIndex: 9999,
+    elevation: 9999,
   },
   snackbar: {
     maxWidth: '90%',
