@@ -12,20 +12,42 @@ import type { AuthStoredUser } from './authStorage';
 const firestoreInstance = getFirestore(getApp());
 const USERS_COLLECTION = 'users';
 
+/** Năm dương lịch đã chạy dọn transaction cũ gần nhất — lưu trên Firestore + cache AsyncStorage (resetData) */
+export const LAST_TRANSACTION_RESET_YEAR_FIELD = 'lastTransactionResetYear';
+
 export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUser: boolean }> {
   const ref = doc(firestoreInstance, USERS_COLLECTION, user.uid);
   const snap = await getDoc(ref);
+  const currentYear = new Date().getFullYear();
 
-  if (snap.exists) {
-    const data = snap.data() as any;
-    const isNewUser: boolean = typeof data.isNewUser === 'boolean' ? data.isNewUser : false;
-    // Optionally refresh basic profile fields.
-    await updateDoc(ref, {
-      email: user.email ?? null,
-      displayName: user.displayName ?? null,
-      photoURL: user.photoURL ?? null,
-      updatedAt: serverTimestamp(),
-    });
+  if (snap.exists()) {
+    const data = (snap.data() ?? {}) as Record<string, unknown>;
+    const isNewUser: boolean =
+      typeof data.isNewUser === 'boolean' ? data.isNewUser : false;
+
+    const email = user.email ?? null;
+    const displayName = user.displayName ?? null;
+    const photoURL = user.photoURL ?? null;
+
+    /** Chỉ ghi Firestore khi có thay đổi — tránh mỗi lần Splash đều bump `updatedAt` */
+    const patch: Record<string, unknown> = {};
+
+    if (data.email !== email) patch.email = email;
+    if (data.displayName !== displayName) patch.displayName = displayName;
+    if (data.photoURL !== photoURL) patch.photoURL = photoURL;
+
+    if (
+      data[LAST_TRANSACTION_RESET_YEAR_FIELD] === undefined ||
+      data[LAST_TRANSACTION_RESET_YEAR_FIELD] === null
+    ) {
+      patch[LAST_TRANSACTION_RESET_YEAR_FIELD] = currentYear - 1;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      patch.updatedAt = serverTimestamp();
+      await updateDoc(ref, patch);
+    }
+
     return { isNewUser };
   }
 
@@ -35,6 +57,7 @@ export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUs
     displayName: user.displayName ?? null,
     photoURL: user.photoURL ?? null,
     isNewUser: true,
+    [LAST_TRANSACTION_RESET_YEAR_FIELD]: currentYear,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -45,8 +68,8 @@ export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUs
 export async function getUserIsNewFlag(uid: string): Promise<boolean | null> {
   const ref = doc(firestoreInstance, USERS_COLLECTION, uid);
   const snap = await getDoc(ref);
-  if (!snap.exists) return null;
-  const data = snap.data() as any;
+  if (!snap.exists()) return null;
+  const data = snap.data() ?? {};
   if (typeof data.isNewUser === 'boolean') return data.isNewUser;
   return null;
 }

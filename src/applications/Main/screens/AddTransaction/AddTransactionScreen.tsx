@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState, useEffect } from 'react';
+import React, { useCallback, useMemo, useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -47,6 +47,7 @@ const transactionsCollection = collection(firestoreInstance, 'transactions');
 
 const AddTransactionScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
+  const contentScrollRef = useRef<ScrollView>(null);
   const navigation =
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'AddTransaction'>>();
@@ -104,6 +105,27 @@ const AddTransactionScreen: React.FC = () => {
   const [expenseSourceFundId, setExpenseSourceFundId] = useState<string>('');
   const [expenseDeficitAmount, setExpenseDeficitAmount] = useState<number>(0);
   const [expenseDeficitSaving, setExpenseDeficitSaving] = useState(false);
+
+  const resetCreateForm = useCallback(() => {
+    setAmount(0);
+    setSelectedCategory('');
+    setSelectedFundId(defaultFund?.id ?? '');
+    setDate(new Date());
+    setNote('');
+    setShowAllCategories(false);
+    setSplitIncomeEnabled(false);
+    setIncomeSplits([]);
+    setActiveSplitId('');
+    setSelectedIncomePresetId('');
+    setExpenseDeficitModalVisible(false);
+    setExpenseTargetFundId('');
+    setExpenseSourceFundId('');
+    setExpenseDeficitAmount(0);
+    setExpenseDeficitSaving(false);
+    requestAnimationFrame(() => {
+      contentScrollRef.current?.scrollTo({ y: 0, animated: true });
+    });
+  }, [defaultFund]);
 
   const goHome = useCallback(() => {
     // Ưu tiên navigate về tab `Home` để tránh unmount/remount cả trang.
@@ -587,7 +609,7 @@ const AddTransactionScreen: React.FC = () => {
         if (navigation.canGoBack()) {
           navigation.goBack();
         } else {
-          goHome();
+          resetCreateForm();
         }
 
         try {
@@ -778,6 +800,8 @@ const AddTransactionScreen: React.FC = () => {
 
       if (navigation.canGoBack()) {
         navigation.goBack();
+      } else {
+        resetCreateForm();
       }
     } catch (error) {
       console.error('Error saving expense with deficit:', error);
@@ -815,6 +839,7 @@ const AddTransactionScreen: React.FC = () => {
       </View>
 
       <ScrollView 
+        ref={contentScrollRef}
         style={styles.content} 
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"

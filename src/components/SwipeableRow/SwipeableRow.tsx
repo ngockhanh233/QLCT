@@ -113,7 +113,10 @@ const SwipeableRow: React.FC<SwipeableRowProps> = ({
     overflow: 'hidden',
   };
 
+  /** Cạnh trái nút vuông — tránh “hai chỗ bo” gặp nhau khi kéo lộ ô xóa */
   const deleteButtonStyle: ViewStyle = {
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
     borderTopRightRadius: borderRadius,
     borderBottomRightRadius: borderRadius,
   };
@@ -160,9 +163,17 @@ const SwipeableRow: React.FC<SwipeableRowProps> = ({
       </View>
       
       <Animated.View
+        renderToHardwareTextureAndroid={false}
         style={[
           styles.rowContent,
-          { transform: [{ translateX }] },
+          {
+            borderTopLeftRadius: borderRadius,
+            borderBottomLeftRadius: borderRadius,
+            borderTopRightRadius: 0,
+            borderBottomRightRadius: 0,
+            overflow: 'hidden',
+            transform: [{ translateX }],
+          },
         ]}
         {...panResponder.panHandlers}
       >
@@ -173,9 +184,10 @@ const SwipeableRow: React.FC<SwipeableRowProps> = ({
 };
 
 const styles = StyleSheet.create({
+  /** Không dùng màu nút xóa — lớp trắng bo góc trái + clip ngoài bo đủ 4 góc để lộ “vết đỏ” chỉ ở góc khi nền là error */
   container: {
     position: 'relative',
-    backgroundColor: colors.error,
+    backgroundColor: colors.background,
   },
   actionsContainer: {
     position: 'absolute',

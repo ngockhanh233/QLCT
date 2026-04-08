@@ -9,6 +9,9 @@ import {
   ActivityIndicator,
   ScrollView,
   Switch,
+  Animated,
+  Pressable,
+  type LayoutChangeEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -29,6 +32,8 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
+import Svg, { Path } from 'react-native-svg';
+import TransactionFilterPanel from './components/TransactionFilterPanel';
 
 interface TransactionViewItem {
   id: string;
@@ -44,6 +49,25 @@ interface TransactionViewItem {
   rawDate: Date;
 }
 
+type TransactionGroup = {
+  date: string;
+  transactions: TransactionViewItem[];
+  total: number;
+};
+
+const FunnelIcon: React.FC<{ width?: number; height?: number; color?: string }> = ({
+  width = 16,
+  height = 16,
+  color = '#000',
+}) => (
+  <Svg width={width} height={height} viewBox="0 0 16 16" fill="none">
+    <Path
+      d="M1.75 3.25C1.75 2.83579 2.08579 2.5 2.5 2.5H13.5C13.9142 2.5 14.25 2.83579 14.25 3.25C14.25 3.43093 14.1845 3.60574 14.0655 3.74209L10 8.4V12.5C10 12.7462 9.87938 12.9768 9.67699 13.1173L7.67699 14.5062C7.21564 14.8267 6.58333 14.4967 6.58333 13.9368V8.4L2.18452 3.74209C2.06549 3.60574 2 3.43093 2 3.25H1.75Z"
+      fill={color}
+    />
+  </Svg>
+);
+
 const TIME_FILTERS: { key: TransactionTimeFilter; label: string }[] = [
   { key: 'day', label: 'Ngày' },
   { key: 'week', label: 'Tuần' },
@@ -58,6 +82,20 @@ const TYPE_FILTERS: { key: TransactionKindFilter; label: string }[] = [
   { key: 'expense', label: 'Khoản chi' },
   { key: 'income', label: 'Khoản thu' },
 ];
+
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<TransactionGroup>);
+/** Scroll list 0 → giá trị này: filter mờ dần và trượt lên (không còn snap/hút) */
+const FILTER_FADE_SCROLL_END = 120;
+const FILTER_EXPAND_THRESHOLD = 8;
+const FILTER_TOGGLE_SHOW_OFFSET = 40;
+/** Bật/tắt nút phễu (pointerEvents) */
+const FILTER_TOGGLE_SHOW_ON = 48;
+const FILTER_TOGGLE_SHOW_OFF = 32;
+/** Hysteresis: coi filter đã ẩn / hiện lại (pointerEvents) */
+const FILTER_HIDDEN_SCROLL_ON = 100;
+const FILTER_VISIBLE_SCROLL_OFF = 25;
+/** Chiều cao mặc định trước khi onLayout (chỉ ~2 hàng filter) */
+const FILTER_PANEL_HEIGHT_FALLBACK = 168;
 
 const TransactionScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -126,6 +164,17 @@ const TransactionScreen: React.FC = () => {
     { fundId: string; deficit: number }[]
   >([]);
   const [splitRefundFundId, setSplitRefundFundId] = useState<string>('');
+  const [isFilterCollapsed, setIsFilterCollapsed] = useState(false);
+  const [showFilterToggle, setShowFilterToggle] = useState(false);
+  const [floatingFilterVisible, setFloatingFilterVisible] = useState(false);
+  /** Chiều cao thật của bộ lọc — tránh khung 340px tạo khoảng trắng lớn */
+  const [filterPanelHeight, setFilterPanelHeight] = useState(FILTER_PANEL_HEIGHT_FALLBACK);
+  const filterCollapsedRef = useRef<boolean>(false);
+  const showFilterToggleRef = useRef<boolean>(false);
+  const listRef = useRef<FlatList<TransactionGroup> | null>(null);
+  const filterScrollY = useRef(new Animated.Value(0)).current;
+  /** Offset list hiện tại — tránh đổi chiều cao filter khi đang lướt (gây giật) */
+  const listScrollYRef = useRef(0);
   const deleteFundScrollRef = useRef<ScrollView | null>(null);
 
   const showErrorModal = useCallback((title: string, message: string) => {
@@ -243,6 +292,108 @@ const TransactionScreen: React.FC = () => {
     setIsCustomDate(false);
   };
 
+  const onFilterPanelLayout = useCallback((e: LayoutChangeEvent) => {
+    const y = listScrollYRef.current;
+    // Chỉ đo lại khi đầu list hoặc đã kéo qua vùng collapse — tránh vòng onLayout ↔ state khi đang giữ scroll giữa chừng
+    if (y > 2 && y < FILTER_FADE_SCROLL_END - 8) return;
+
+    const raw = e.nativeEvent.layout.height;
+    if (raw <= 0) return;
+    const h = Math.round(raw / 4) * 4;
+
+    setFilterPanelHeight(prev => {
+      if (Math.abs(prev - h) < 8) return prev;
+      return h;
+    });
+  }, []);
+
+  /** Khung cố định + translate + opacity (mờ dần) */
+  const filterClipLayoutStyle = useMemo(
+    () => ({
+      height: filterPanelHeight,
+      overflow: 'hidden' as const,
+    }),
+    [filterPanelHeight],
+  );
+
+  const filterInnerScrollLiftStyle = useMemo(
+    () => ({
+      transform: [
+        {
+          translateY: filterScrollY.interpolate({
+            inputRange: [0, FILTER_FADE_SCROLL_END],
+            outputRange: [0, -filterPanelHeight],
+            extrapolate: 'clamp',
+          }),
+        },
+      ],
+    }),
+    [filterScrollY, filterPanelHeight],
+  );
+
+  /**
+   * Summary + list: dùng marginTop âm theo scroll — **không** dùng translateY ở đây.
+   * Transform không thu layout nên để lại khoảng trắng lớn phía dưới list (trên tab bar).
+   */
+  const belowFilterScrollLiftStyle = useMemo(
+    () => ({
+      marginTop: filterScrollY.interpolate({
+        inputRange: [0, FILTER_FADE_SCROLL_END],
+        outputRange: [0, -filterPanelHeight],
+        extrapolate: 'clamp',
+      }),
+    }),
+    [filterScrollY, filterPanelHeight],
+  );
+
+  const filterInnerAnimatedStyle = useMemo(
+    () => ({
+      opacity: filterScrollY.interpolate({
+        inputRange: [0, FILTER_FADE_SCROLL_END],
+        outputRange: [1, 0],
+        extrapolate: 'clamp',
+      }),
+    }),
+    [filterScrollY],
+  );
+
+  const handleSelectTimeFilter = useCallback((filter: TransactionTimeFilter) => {
+    handleChangeFilter(filter);
+    if (floatingFilterVisible) {
+      setFloatingFilterVisible(false);
+    }
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+  }, [handleChangeFilter, floatingFilterVisible]);
+
+  useEffect(() => {
+    const id = filterScrollY.addListener(({ value }) => {
+      listScrollYRef.current = value;
+
+      if (value >= FILTER_HIDDEN_SCROLL_ON && !filterCollapsedRef.current) {
+        filterCollapsedRef.current = true;
+        setIsFilterCollapsed(true);
+      } else if (value <= FILTER_VISIBLE_SCROLL_OFF && filterCollapsedRef.current) {
+        filterCollapsedRef.current = false;
+        setIsFilterCollapsed(false);
+      }
+
+      let nextShowToggle = showFilterToggleRef.current;
+      if (value >= FILTER_TOGGLE_SHOW_ON) nextShowToggle = true;
+      else if (value <= FILTER_TOGGLE_SHOW_OFF) nextShowToggle = false;
+      if (nextShowToggle !== showFilterToggleRef.current) {
+        showFilterToggleRef.current = nextShowToggle;
+        setShowFilterToggle(nextShowToggle);
+      }
+    });
+    return () => filterScrollY.removeListener(id);
+  }, [filterScrollY]);
+
+  useEffect(() => {
+    if (!isFilterCollapsed && floatingFilterVisible) {
+      setFloatingFilterVisible(false);
+    }
+  }, [isFilterCollapsed, floatingFilterVisible]);
+
   useFocusEffect(
     useCallback(() => {
       if (!getAndClearTransactionListNeedsRefresh()) return;
@@ -319,7 +470,17 @@ const TransactionScreen: React.FC = () => {
     [transactions],
   );
 
-  const groupedByDate = useMemo(() => {
+  const netAmount = useMemo(() => {
+    // NET thể hiện luồng ròng theo filter đang xem.
+    // - all: Thu - Chi
+    // - income: +Thu
+    // - expense: -Chi
+    if (typeFilter === 'income') return totalIncome;
+    if (typeFilter === 'expense') return -totalExpense;
+    return totalIncome - totalExpense;
+  }, [typeFilter, totalIncome, totalExpense]);
+
+  const groupedByDate: TransactionGroup[] = useMemo(() => {
     const groups: { [key: string]: TransactionViewItem[] } = {};
 
     viewItems.forEach(t => {
@@ -485,7 +646,7 @@ const TransactionScreen: React.FC = () => {
     );
   };
 
-  const renderDateGroup = ({ item }: { item: { date: string; transactions: TransactionViewItem[]; total: number } }) => (
+  const renderDateGroup = ({ item }: { item: TransactionGroup }) => (
     <View style={styles.dateGroup}>
       <View style={styles.dateHeader}>
         <Text style={styles.dateText}>{item.date}</Text>
@@ -506,20 +667,72 @@ const TransactionScreen: React.FC = () => {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Giao dịch</Text>
-        <TouchableOpacity
-          style={[
-            styles.filterIconButton,
-            isDateFilterActive && styles.filterIconButtonActive,
-          ]}
-          activeOpacity={0.7}
-          onPress={openFilterModeModal}
-        >
-          <CalendarIcon
-            width={20}
-            height={20}
-            color={isDateFilterActive ? colors.white : colors.text}
-          />
-        </TouchableOpacity>
+        <View style={styles.headerActions}>
+          <Animated.View
+            pointerEvents={showFilterToggle ? 'auto' : 'none'}
+            style={{
+              opacity: filterScrollY.interpolate({
+                inputRange: [FILTER_EXPAND_THRESHOLD, FILTER_TOGGLE_SHOW_OFFSET, 76],
+                outputRange: [0, 0.2, 1],
+                extrapolate: 'clamp',
+              }),
+              transform: [
+                {
+                  translateY: filterScrollY.interpolate({
+                    inputRange: [FILTER_EXPAND_THRESHOLD, 76],
+                    outputRange: [-8, 0],
+                    extrapolate: 'clamp',
+                  }),
+                },
+                {
+                  scale: filterScrollY.interpolate({
+                    inputRange: [FILTER_EXPAND_THRESHOLD, 76],
+                    outputRange: [0.9, 1],
+                    extrapolate: 'clamp',
+                  }),
+                },
+              ],
+            }}
+          >
+            <TouchableOpacity
+              style={[
+                styles.appbarFilterToggleButton,
+                !isFilterCollapsed && styles.appbarFilterToggleButtonExpanded,
+              ]}
+              activeOpacity={0.8}
+              onPress={() => {
+                if (isFilterCollapsed) {
+                  setFloatingFilterVisible(prev => !prev);
+                } else {
+                  listRef.current?.scrollToOffset({
+                    offset: FILTER_FADE_SCROLL_END,
+                    animated: true,
+                  });
+                }
+              }}
+            >
+              <FunnelIcon
+                width={16}
+                height={16}
+                color={isFilterCollapsed ? colors.primary : colors.textSecondary}
+              />
+            </TouchableOpacity>
+          </Animated.View>
+          <TouchableOpacity
+            style={[
+              styles.filterIconButton,
+              isDateFilterActive && styles.filterIconButtonActive,
+            ]}
+            activeOpacity={0.7}
+            onPress={openFilterModeModal}
+          >
+            <CalendarIcon
+              width={20}
+              height={20}
+              color={isDateFilterActive ? colors.white : colors.text}
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Modal chọn chế độ lọc ngày */}
@@ -1277,201 +1490,185 @@ const TransactionScreen: React.FC = () => {
         </View>
       </Modal>
 
-      {/* Time Filter Tabs (chỉ hiện khi không lọc theo ngày tùy chọn) */}
-      {dateFilterMode === 'none' && (
-        <View style={styles.filterContainer}>
-          {TIME_FILTERS.map(filter => (
-            <TouchableOpacity
-              key={filter.key}
-              style={[
-                styles.filterTab,
-                activeFilter === filter.key && styles.filterTabActive,
-              ]}
-              onPress={() => handleChangeFilter(filter.key)}
-              activeOpacity={0.7}
-            >
-              <Text
-                style={[
-                  styles.filterTabText,
-                  activeFilter === filter.key && styles.filterTabTextActive,
-                ]}
-              >
-                {filter.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
+      <Animated.View style={[styles.filterClipOuter, filterClipLayoutStyle]}>
+        <Animated.View
+          style={[
+            styles.filterAnimatedContainer,
+            filterInnerAnimatedStyle,
+            filterInnerScrollLiftStyle,
+          ]}
+          pointerEvents={isFilterCollapsed ? 'none' : 'auto'}
+          renderToHardwareTextureAndroid
+        >
+        <View onLayout={onFilterPanelLayout}>
+        <TransactionFilterPanel
+          timeFilters={TIME_FILTERS}
+          typeFilters={TYPE_FILTERS}
+          activeFilter={activeFilter}
+          typeFilter={typeFilter}
+          dateFilterMode={dateFilterMode}
+          fromDate={fromDate}
+          toDate={toDate}
+          onChangeTimeFilter={handleSelectTimeFilter}
+          onChangeTypeFilter={setTypeFilter}
+          onSingleDateChange={(date: Date) => {
+            setFromDate(date);
+            setDateFilterMode('single');
+            setIsCustomDate(true);
+          }}
+          onFromDateChange={handleFromDateChange}
+          onToDateChange={handleToDateChange}
+          onResetFilters={handleResetFilters}
+        />
         </View>
-      )}
+        </Animated.View>
+      </Animated.View>
 
-      {/* Bộ lọc loại giao dịch: tất cả / chi tiêu / thu nhập */}
-      <View style={styles.typeFilterRow}>
-        {TYPE_FILTERS.map(filter => (
-          <TouchableOpacity
-            key={filter.key}
-            style={[
-              styles.typeFilterChip,
-              typeFilter === filter.key && styles.typeFilterChipActive,
-            ]}
-            onPress={() => setTypeFilter(filter.key)}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.typeFilterChipText,
-                typeFilter === filter.key && styles.typeFilterChipTextActive,
-              ]}
-            >
-              {filter.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* Bộ lọc ngày: theo 1 ngày hoặc khoảng thời gian */}
-      {dateFilterMode === 'single' && fromDate && (
-        <View style={styles.dateFilterRow}>
-          <View style={styles.datePickerHalf}>
-            <DatePicker
-              value={fromDate}
-              onChange={(date: Date) => {
+      {floatingFilterVisible && (
+        <View style={styles.floatingFilterWrap} pointerEvents="box-none">
+          <Pressable
+            style={styles.floatingFilterBackdrop}
+            onPress={() => setFloatingFilterVisible(false)}
+          />
+          <View style={[styles.floatingFilterCard, { marginTop: insets.top + 58 }]}>
+            <TransactionFilterPanel
+              timeFilters={TIME_FILTERS}
+              typeFilters={TYPE_FILTERS}
+              activeFilter={activeFilter}
+              typeFilter={typeFilter}
+              dateFilterMode={dateFilterMode}
+              fromDate={fromDate}
+              toDate={toDate}
+              onChangeTimeFilter={handleSelectTimeFilter}
+              onChangeTypeFilter={setTypeFilter}
+              onSingleDateChange={(date: Date) => {
                 setFromDate(date);
                 setDateFilterMode('single');
                 setIsCustomDate(true);
               }}
-              label="Ngày"
-              maxDate={new Date()}
+              onFromDateChange={handleFromDateChange}
+              onToDateChange={handleToDateChange}
+              onResetFilters={handleResetFilters}
             />
           </View>
-          <TouchableOpacity
-            style={styles.resetFilterButton}
-            activeOpacity={0.7}
-            onPress={handleResetFilters}
-          >
-            <Text style={styles.resetFilterIcon}>↺</Text>
-          </TouchableOpacity>
         </View>
       )}
 
-      {dateFilterMode === 'range' && (
-        <View style={styles.dateFilterRow}>
-          <View style={styles.datePickerHalf}>
-            <DatePicker
-              value={fromDate ?? new Date()}
-              onChange={handleFromDateChange}
-              label="Từ ngày"
-              maxDate={toDate ?? new Date()}
-            />
-          </View>
-          <View style={styles.datePickerHalf}>
-            <DatePicker
-              value={toDate ?? fromDate ?? new Date()}
-              onChange={handleToDateChange}
-              label="Đến ngày"
-              minDate={fromDate ?? undefined}
-              maxDate={new Date()}
-            />
-          </View>
-          <TouchableOpacity
-            style={styles.resetFilterButton}
-            activeOpacity={0.7}
-            onPress={handleResetFilters}
-          >
-            <Text style={styles.resetFilterIcon}>↺</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Summary Card */}
-      <View style={styles.summaryCard}>
-        {(typeFilter === 'all' || typeFilter === 'expense') && (
-          <View style={styles.summaryItem}>
-            <View style={styles.summaryTitleRow}>
-              <View
-                style={[styles.summaryIconCircle, { borderColor: colors.error }]}
-              >
-                <Text
-                  style={[styles.summaryIconText, { color: colors.error }]}
-                >
-                  -
-                </Text>
-              </View>
-              <Text style={styles.summaryLabel}>Khoản chi</Text>
-            </View>
-            <Text style={[styles.summaryAmount, { color: colors.error }]}>
-              {totalExpense.toLocaleString('vi-VN')}đ
-            </Text>
-          </View>
-        )}
-
-        {typeFilter === 'all' && <View style={styles.summaryDivider} />}
-
-        {(typeFilter === 'all' || typeFilter === 'income') && (
-          <View style={styles.summaryItem}>
-            <View style={styles.summaryTitleRow}>
-              <View
-                style={[styles.summaryIconCircle, { borderColor: colors.success }]}
-              >
-                <Text
-                  style={[styles.summaryIconText, { color: colors.success }]}
-                >
-                  +
-                </Text>
-              </View>
-              <Text style={styles.summaryLabel}>Khoản thu</Text>
-            </View>
-            <Text style={[styles.summaryAmount, { color: colors.success }]}>
-              {totalIncome.toLocaleString('vi-VN')}đ
-            </Text>
-          </View>
-        )}
-      </View>
-
-      {/* Transaction List / Skeleton */}
-      {((!isInitialized && transactions.length === 0) ||
-        (isRefreshing && transactions.length === 0)) ? (
-        <View style={styles.listContainer}>
-          {/* Skeleton groups */}
-          {Array.from({ length: 3 }).map((_, idx) => (
-            <View key={idx} style={styles.skeletonDateGroup}>
-              <View style={styles.skeletonDateHeader}>
-                <Skeleton width="40%" height={14} />
-                <Skeleton width={80} height={14} />
-              </View>
-              {Array.from({ length: 3 }).map((__, jdx) => (
-                <View key={jdx} style={styles.skeletonItemRow}>
-                  <Skeleton width={46} height={46} radius={14} />
-                  <View style={styles.skeletonItemText}>
-                    <Skeleton width="60%" height={14} />
-                    <View style={{ height: 6 }} />
-                    <Skeleton width="40%" height={12} />
+      <Animated.View style={[styles.belowFilterSection, belowFilterScrollLiftStyle]}>
+        {/* Summary Card */}
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCard}>
+            {(typeFilter === 'all' || typeFilter === 'expense') && (
+              <View style={[styles.summaryItem, styles.summaryItemExpense]}>
+                <View style={styles.summaryTitleRow}>
+                  <View
+                    style={[styles.summaryIconCircle, { borderColor: colors.error }]}
+                  >
+                    <Text
+                      style={[styles.summaryIconText, { color: colors.error }]}
+                    >
+                      -
+                    </Text>
                   </View>
-                  <View style={styles.skeletonItemAmount}>
-                    <Skeleton width={70} height={14} />
-                    <View style={{ height: 6 }} />
-                    <Skeleton width={40} height={12} />
-                  </View>
+                  <Text style={styles.summaryLabel}>Khoản chi</Text>
                 </View>
-              ))}
+                <Text style={[styles.summaryAmount, { color: colors.error }]}>
+                  {totalExpense.toLocaleString('vi-VN')}đ
+                </Text>
+              </View>
+            )}
+
+            {typeFilter === 'all' && <View style={styles.summaryDivider} />}
+
+            {(typeFilter === 'all' || typeFilter === 'income') && (
+              <View style={[styles.summaryItem, styles.summaryItemIncome]}>
+                <View style={styles.summaryTitleRow}>
+                  <View
+                    style={[styles.summaryIconCircle, { borderColor: colors.success }]}
+                  >
+                    <Text
+                      style={[styles.summaryIconText, { color: colors.success }]}
+                    >
+                      +
+                    </Text>
+                  </View>
+                  <Text style={styles.summaryLabel}>Khoản thu</Text>
+                </View>
+                <Text style={[styles.summaryAmount, { color: colors.success }]}>
+                  {totalIncome.toLocaleString('vi-VN')}đ
+                </Text>
+              </View>
+            )}
+            <View style={styles.netInlineDivider} />
+            <View style={styles.netInlineRow}>
+              <Text style={styles.netLabel}>NET</Text>
+              <Text
+                style={[
+                  styles.netAmount,
+                  netAmount >= 0 ? { color: colors.success } : { color: colors.error },
+                ]}
+              >
+                {netAmount >= 0 ? '+' : '-'}
+                {Math.abs(netAmount).toLocaleString('vi-VN')}đ
+              </Text>
             </View>
-          ))}
+          </View>
         </View>
-      ) : (
-        <FlatList
-          data={groupedByDate}
-          renderItem={renderDateGroup}
-          keyExtractor={item => item.date}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.listContainer}
-          refreshControl={
-            <RefreshControl refreshing={isRefreshing} onRefresh={refresh} />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>Chưa có giao dịch nào</Text>
-            </View>
-          }
-        />
-      )}
+
+        {/* Transaction List / Skeleton */}
+        {((!isInitialized && transactions.length === 0) ||
+          (isRefreshing && transactions.length === 0)) ? (
+          <View style={styles.listContainer}>
+            {/* Skeleton groups */}
+            {Array.from({ length: 3 }).map((_, idx) => (
+              <View key={idx} style={styles.skeletonDateGroup}>
+                <View style={styles.skeletonDateHeader}>
+                  <Skeleton width="40%" height={14} />
+                  <Skeleton width={80} height={14} />
+                </View>
+                {Array.from({ length: 3 }).map((__, jdx) => (
+                  <View key={jdx} style={styles.skeletonItemRow}>
+                    <Skeleton width={46} height={46} radius={14} />
+                    <View style={styles.skeletonItemText}>
+                      <Skeleton width="60%" height={14} />
+                      <View style={{ height: 6 }} />
+                      <Skeleton width="40%" height={12} />
+                    </View>
+                    <View style={styles.skeletonItemAmount}>
+                      <Skeleton width={70} height={14} />
+                      <View style={{ height: 6 }} />
+                      <Skeleton width={40} height={12} />
+                    </View>
+                  </View>
+                ))}
+              </View>
+            ))}
+          </View>
+        ) : (
+          <AnimatedFlatList
+            ref={listRef}
+            style={styles.listFlex}
+            data={groupedByDate}
+            renderItem={renderDateGroup}
+            keyExtractor={item => item.date}
+            showsVerticalScrollIndicator={false}
+            onScroll={Animated.event(
+              [{ nativeEvent: { contentOffset: { y: filterScrollY } } }],
+              { useNativeDriver: false },
+            )}
+            scrollEventThrottle={16}
+            contentContainerStyle={styles.listContainer}
+            refreshControl={
+              <RefreshControl refreshing={isRefreshing} onRefresh={refresh} />
+            }
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>Chưa có giao dịch nào</Text>
+              </View>
+            }
+          />
+        )}
+      </Animated.View>
     </View>
   );
 };
@@ -1481,12 +1678,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
+  /** Summary + list: flex để list chiếm phần còn lại; translateY theo scroll không dùng layout */
+  belowFilterSection: {
+    flex: 1,
+    minHeight: 0,
+  },
+  listFlex: {
+    flex: 1,
+  },
   header: {
     paddingHorizontal: 20,
     paddingVertical: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   headerTitle: {
     fontSize: 28,
@@ -1510,6 +1720,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 16,
     gap: 8,
+  },
+  filterClipOuter: {
+    width: '100%',
+  },
+  filterAnimatedContainer: {
+    overflow: 'hidden',
+  },
+  floatingFilterWrap: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 30,
+    elevation: 30,
+  },
+  floatingFilterBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.black + '20',
+  },
+  floatingFilterCard: {
+    marginTop: 88,
+    marginHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: colors.black + '20',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
   },
   typeFilterRow: {
     flexDirection: 'row',
@@ -1557,8 +1796,9 @@ const styles = StyleSheet.create({
   },
   summaryCard: {
     flexDirection: 'row',
-    marginHorizontal: 20,
-    marginBottom: 20,
+    flexWrap: 'wrap',
+    flex: 1,
+    marginBottom: 16,
     backgroundColor: colors.white,
     borderRadius: 16,
     padding: 16,
@@ -1568,13 +1808,68 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 3,
   },
+  summaryRow: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    marginHorizontal: 20,
+  },
+  netInlineDivider: {
+    marginTop: 12,
+    marginBottom: 10,
+    width: '100%',
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  netInlineRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  netLabel: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 0.2,
+  },
+  netAmount: {
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  appbarFilterToggleButton: {
+    borderRadius: 999,
+    width: 34,
+    height: 34,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary + '55',
+    backgroundColor: colors.primary + '12',
+  },
+  appbarFilterToggleButtonExpanded: {
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+  },
   summaryItem: {
     flex: 1,
     alignItems: 'center',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  summaryItemExpense: {
+    backgroundColor: colors.error + '0F',
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  summaryItemIncome: {
+    backgroundColor: colors.success + '0F',
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
   },
   summaryDivider: {
     width: 1,
-    backgroundColor: colors.border,
+    backgroundColor: '#EEEEEE',
     marginVertical: 4,
   },
   summaryLabel: {

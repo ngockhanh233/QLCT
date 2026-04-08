@@ -20,7 +20,12 @@ import {
 } from '@react-native-firebase/auth';
 import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { colors } from '../../utils/color';
-import { setStoredUser, type AuthStoredUser } from '../../services';
+import {
+  setStoredUser,
+  ensureUserProfile,
+  cacheTransactionResetYearFromFirestoreToAsyncStorage,
+  type AuthStoredUser,
+} from '../../services';
 import { ErrorPopup } from '../../components';
 
 const { width } = Dimensions.get('window');
@@ -66,6 +71,12 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       };
 
       await setStoredUser(baseUser);
+      try {
+        await ensureUserProfile(baseUser);
+        await cacheTransactionResetYearFromFirestoreToAsyncStorage(baseUser.uid);
+      } catch (e) {
+        console.warn('ensureUserProfile / cache reset year:', e);
+      }
 
       onLoginSuccess();
     } catch (error: any) {

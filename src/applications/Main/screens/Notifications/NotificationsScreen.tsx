@@ -7,6 +7,7 @@ import {
   FlatList,
   RefreshControl,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useIsFocused, useNavigation } from '@react-navigation/native';
@@ -315,8 +316,14 @@ const NotificationsScreen: React.FC = () => {
               <View style={[styles.card, stickyUnreadIds.has(item.id) && styles.cardUnread]}>
                 <View style={styles.cardTop}>
                   <View style={styles.cardTitleRow}>
-                    <View style={[styles.kindDot, { backgroundColor: getKindColor(item.kind) }]} />
-                    <Text style={styles.cardTitle} numberOfLines={1}>{item.title}</Text>
+                    <View style={styles.kindDotWrap}>
+                      <View
+                        style={[styles.kindDot, { backgroundColor: getKindColor(item.kind) }]}
+                      />
+                    </View>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {item.title}
+                    </Text>
                   </View>
                   <Text style={styles.cardTime}>{renderTime(item.createdAtMs)}</Text>
                 </View>
@@ -414,13 +421,21 @@ const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.white,
     paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingTop: 14,
+    paddingBottom: 12,
     borderWidth: 1,
     borderColor: colors.border,
+    /** Chỉ bo trái — cạnh phải thẳng (khớp SwipeableRow khi kéo) */
+    borderTopLeftRadius: 16,
+    borderBottomLeftRadius: 16,
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    overflow: 'hidden',
   },
+  /** Viền không dùng màu alpha — tránh góc trông nhạt/mờ khi chồng nền */
   cardUnread: {
     backgroundColor: '#FFF8F3',
-    borderColor: colors.primary + '22',
+    borderColor: '#F0C9B8',
   },
   cardTitleRow: {
     flexDirection: 'row',
@@ -428,15 +443,22 @@ const styles = StyleSheet.create({
     gap: 8,
     flex: 1,
     paddingRight: 8,
+    minWidth: 0,
+  },
+  /** Cố định chiều cao hàng với lineHeight tiêu đề — chấm căn giữa theo trục dọc, không “lơ lửng” */
+  kindDotWrap: {
+    height: 20,
+    justifyContent: 'center',
+    flexShrink: 0,
   },
   kindDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
   cardTop: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 10,
     marginBottom: 6,
@@ -446,11 +468,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     color: colors.text,
+    lineHeight: 20,
+    ...(Platform.OS === 'android' ? { includeFontPadding: false } : {}),
   },
   cardTime: {
     fontSize: 11,
     fontWeight: '600',
     color: colors.textLight,
+    lineHeight: 16,
+    marginTop: 2,
+    flexShrink: 0,
   },
   cardMessage: {
     fontSize: 13,

@@ -1,6 +1,10 @@
 import React, { useEffect } from 'react';
 import { View, Image, StyleSheet, Dimensions } from 'react-native';
-import { getStoredUser, maybeResetUserTransactionsYearly } from '../../services';
+import {
+  getStoredUser,
+  ensureUserProfile,
+  maybeResetUserTransactionsYearly,
+} from '../../services';
 
 const { width } = Dimensions.get('window');
 
@@ -15,12 +19,12 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
         const stored = await getStoredUser();
 
         if (stored?.uid) {
-          // Thử reset dữ liệu cũ nếu cần (hàng năm, giữ lại tháng 12 năm trước).
           try {
+            await ensureUserProfile(stored);
+            // maybeResetUserTransactionsYearly: năm đã dọn ưu tiên AsyncStorage, không có mới đọc Firestore
             await maybeResetUserTransactionsYearly(stored.uid);
           } catch (resetError) {
-            // Không chặn luồng đăng nhập nếu reset lỗi, chỉ log lại.
-            console.warn('Error running yearly reset:', resetError);
+            console.warn('Error ensure profile / yearly reset:', resetError);
           }
         }
 
