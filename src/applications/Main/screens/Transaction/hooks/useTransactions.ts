@@ -70,11 +70,21 @@ function getRangeForTimeFilter(
   }
 
   if (filter === 'week') {
-    const end = endOfDay(baseDate);
-    const start = startOfDay(
-      new Date(end.getFullYear(), end.getMonth(), end.getDate() - 6),
+    // Tuần hiện tại: Thứ 2 → Chủ nhật (đồng bộ với DatePicker firstDay=1).
+    // getDay(): 0=CN, 1=T2, 2=T3, 3=T4, 4=T5, 5=T6, 6=T7.
+    const dayIdx = baseDate.getDay();
+    const offsetFromMonday = (dayIdx + 6) % 7;
+    const monday = new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate() - offsetFromMonday,
     );
-    return { start, end };
+    const sunday = new Date(
+      baseDate.getFullYear(),
+      baseDate.getMonth(),
+      baseDate.getDate() - offsetFromMonday + 6,
+    );
+    return { start: startOfDay(monday), end: endOfDay(sunday) };
   }
 
   if (filter === 'month') {

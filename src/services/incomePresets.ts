@@ -20,6 +20,8 @@ export type IncomePresetAllocation = {
 export type IncomePreset = {
   id: string;
   name: string;
+  /** Optional: danh mục thu nhập mặc định khi chọn preset này. */
+  categoryId?: string;
   allocations: IncomePresetAllocation[];
   createdAt?: any;
   updatedAt?: any;

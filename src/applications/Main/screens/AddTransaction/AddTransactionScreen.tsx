@@ -24,8 +24,7 @@ import {
   increment,
 } from '@react-native-firebase/firestore';
 import { colors } from '../../../../utils/color';
-import ChevronDownIcon from '../../../../assets/icons/ChevronDownIcon';
-import { DatePicker, CurrencyInput } from '../../../../components';
+import { DatePicker, TimePicker, CurrencyInput, CategoryPicker } from '../../../../components';
 import { EXPENDITURE_CATEGORIES } from '../../../../constants/ExpenditureCategoryConstants';
 import { INCOME_CATEGORIES } from '../../../../constants/IncomeCategoryConstants';
 import { getStoredUser, pushBalanceNotification } from '../../../../services';
@@ -91,7 +90,6 @@ const AddTransactionScreen: React.FC = () => {
   );
   const [note, setNote] = useState(initialData?.note ?? '');
   const [isSaving, setIsSaving] = useState(false);
-  const [showAllCategories, setShowAllCategories] = useState(false);
   const [splitIncomeEnabled, setSplitIncomeEnabled] = useState(false);
   const [incomeSplits, setIncomeSplits] = useState<
     Array<{ id: string; fundId: string; amount: number }>
@@ -99,6 +97,21 @@ const AddTransactionScreen: React.FC = () => {
   const [activeSplitId, setActiveSplitId] = useState<string>('');
   const { presets: incomePresets } = useIncomePresets();
   const [selectedIncomePresetId, setSelectedIncomePresetId] = useState<string>('');
+
+  const handleDateChange = useCallback((picked: Date) => {
+    const now = new Date();
+    const isToday =
+      picked.getFullYear() === now.getFullYear() &&
+      picked.getMonth() === now.getMonth() &&
+      picked.getDate() === now.getDate();
+    const next = new Date(picked);
+    if (isToday) {
+      next.setHours(now.getHours(), now.getMinutes(), 0, 0);
+    } else {
+      next.setHours(0, 0, 0, 0);
+    }
+    setDate(next);
+  }, []);
 
   const [expenseDeficitModalVisible, setExpenseDeficitModalVisible] = useState(false);
   const [expenseTargetFundId, setExpenseTargetFundId] = useState<string>('');
@@ -112,7 +125,6 @@ const AddTransactionScreen: React.FC = () => {
     setSelectedFundId(defaultFund?.id ?? '');
     setDate(new Date());
     setNote('');
-    setShowAllCategories(false);
     setSplitIncomeEnabled(false);
     setIncomeSplits([]);
     setActiveSplitId('');
@@ -230,6 +242,9 @@ const AddTransactionScreen: React.FC = () => {
       if (total > 0) {
         setAmount(total);
       }
+      if (preset.categoryId) {
+        setSelectedCategory(preset.categoryId);
+      }
     },
     [],
   );
@@ -239,10 +254,6 @@ const AddTransactionScreen: React.FC = () => {
       setSelectedFundId(defaultFund.id);
     }
   }, [isEditMode, defaultFund, funds.length, selectedFundId]);
-
-  useEffect(() => {
-    setShowAllCategories(false);
-  }, [transactionType]);
 
   useEffect(() => {
     if (transactionType !== 'income' || isEditMode) {
@@ -268,13 +279,6 @@ const AddTransactionScreen: React.FC = () => {
     if (!selectedIncomePreset) return;
     applyIncomePreset(selectedIncomePreset, amount);
   }, [amount, applyIncomePreset, selectedIncomePreset, splitIncomeEnabled]);
-
-  const visibleCategories = useMemo(() => {
-    if (showAllCategories) return categories;
-    if (categories.length <= 6) return categories;
-    // Show 5 popular categories + "Xem thêm" tile to avoid orphan items like "Khác"
-    return categories.slice(0, 5);
-  }, [categories, showAllCategories]);
 
   const handleSave = async () => {
     if (amount <= 0) {
@@ -901,14 +905,25 @@ const AddTransactionScreen: React.FC = () => {
           />
         </View>
 
-        {/* Date Picker */}
+        {/* Date & Time Picker */}
         <View style={styles.inputGroup}>
-          <DatePicker
-            label="Ngày"
-            value={date}
-            onChange={setDate}
-            placeholder="Chọn ngày"
-          />
+          <View style={styles.dateTimeRow}>
+            <View style={styles.dateTimeDate}>
+              <DatePicker
+                label="Ngày"
+                value={date}
+                onChange={handleDateChange}
+                placeholder="Chọn ngày"
+              />
+            </View>
+            <View style={styles.dateTimeTime}>
+              <TimePicker
+                label="Giờ"
+                value={date}
+                onChange={setDate}
+              />
+            </View>
+          </View>
         </View>
 
         {/* Fund Selection - Cả thu và chi đều chọn quỹ */}
@@ -1282,73 +1297,12 @@ const AddTransactionScreen: React.FC = () => {
 
         {/* Category Selection */}
         <View style={styles.inputGroup}>
-          <Text style={styles.inputLabel}>Danh mục</Text>
-          <View style={styles.categoryGrid}>
-            {visibleCategories.map((cat) => {
-              const IconComponent = cat.icon;
-              const isSelected = selectedCategory === cat.id;
-              return (
-                <TouchableOpacity
-                  key={cat.id}
-                  style={[
-                    styles.categoryItem,
-                    isSelected && styles.categoryItemActive,
-                    isSelected && { borderColor: cat.color },
-                  ]}
-                  onPress={() => setSelectedCategory(cat.id)}
-                  activeOpacity={0.75}
-                >
-                  <View
-                    style={[
-                      styles.categoryIcon,
-                      { backgroundColor: cat.color + '15' },
-                    ]}
-                  >
-                    <IconComponent width={22} height={22} color={cat.color} />
-                  </View>
-                  <Text
-                    style={[
-                      styles.categoryText,
-                      isSelected && { color: cat.color },
-                    ]}
-                    numberOfLines={2}
-                  >
-                    {cat.name}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-
-            {!showAllCategories && categories.length > 6 && (
-              <TouchableOpacity
-                style={[styles.categoryItem, styles.moreCategoryItem]}
-                onPress={() => setShowAllCategories(true)}
-                activeOpacity={0.8}
-              >
-                <View style={[styles.categoryIcon, styles.moreCategoryIcon]}>
-                  <ChevronDownIcon width={20} height={20} color={colors.primary} />
-                </View>
-                <Text style={[styles.categoryText, styles.moreCategoryText]} numberOfLines={2}>
-                  Xem thêm
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {showAllCategories && categories.length > 6 && (
-              <TouchableOpacity
-                style={[styles.categoryItem, styles.moreCategoryItem]}
-                onPress={() => setShowAllCategories(false)}
-                activeOpacity={0.8}
-              >
-                <View style={[styles.categoryIcon, styles.moreCategoryIcon, { transform: [{ rotate: '180deg' }] }]}>
-                  <ChevronDownIcon width={20} height={20} color={colors.primary} />
-                </View>
-                <Text style={[styles.categoryText, styles.moreCategoryText]} numberOfLines={2}>
-                  Thu gọn
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          <CategoryPicker
+            label="Danh mục"
+            categories={categories}
+            value={selectedCategory}
+            onChange={setSelectedCategory}
+          />
         </View>
 
       </ScrollView>
@@ -1455,10 +1409,17 @@ const AddTransactionScreen: React.FC = () => {
                           </View>
                         </View>
                         <View style={styles.deficitSourceTextWrap}>
-                      <Text style={styles.deficitSourceName}>
+                      <Text
+                        style={styles.deficitSourceName}
+                        numberOfLines={1}
+                        ellipsizeMode="tail"
+                      >
                         {f.name ?? 'Quỹ'}
                       </Text>
-                      <Text style={styles.deficitSourceBalance}>
+                      <Text
+                        style={styles.deficitSourceBalance}
+                        numberOfLines={1}
+                      >
                         {(f.balance ?? 0).toLocaleString('vi-VN')}đ
                       </Text>
                     </View>
@@ -1568,12 +1529,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   deficitSourceRow: {
-    paddingVertical: 8,
-    paddingHorizontal: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     borderRadius: 10,
     backgroundColor: colors.backgroundSecondary,
-    marginTop: 0,
-    minWidth: 170,
+    width: 200,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-start',
@@ -1620,7 +1580,7 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
   },
   deficitCancelBtn: {
     flex: 1,
@@ -1695,57 +1655,21 @@ const styles = StyleSheet.create({
   inputGroup: {
     marginTop: 24,
   },
+  dateTimeRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  dateTimeDate: {
+    flex: 1.4,
+  },
+  dateTimeTime: {
+    flex: 1,
+  },
   inputLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: colors.text,
     marginBottom: 12,
-  },
-  categoryGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    paddingVertical: 4,
-  },
-  categoryItem: {
-    alignItems: 'center',
-    padding: 10,
-    borderRadius: 12,
-    backgroundColor: colors.white,
-    borderWidth: 2,
-    borderColor: 'transparent',
-    width: '31%',
-    marginBottom: 12,
-    minHeight: 92,
-  },
-  categoryItemActive: {
-    borderWidth: 2,
-  },
-  categoryIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  categoryText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    textAlign: 'center',
-  },
-  moreCategoryItem: {
-    backgroundColor: colors.backgroundSecondary,
-    borderColor: colors.primary + '25',
-    borderStyle: 'dashed',
-  },
-  moreCategoryIcon: {
-    backgroundColor: colors.primary + '14',
-  },
-  moreCategoryText: {
-    color: colors.primary,
-    fontWeight: '800',
   },
   fundEmptyHint: {
     backgroundColor: colors.backgroundSecondary,

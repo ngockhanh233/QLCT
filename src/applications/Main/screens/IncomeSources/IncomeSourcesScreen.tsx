@@ -22,25 +22,26 @@ import { type IncomePreset } from '../../../../services/incomePresets';
 import type { RootStackParamList } from '../../MainScreen';
 import { showSnackbar } from '../../../../utils/snackbar';
 import { confirm } from '../../../../utils/confirm';
-import { CurrencyInput, SwipeableRow } from '../../../../components';
+import { CurrencyInput, SwipeableRow, CategoryPicker } from '../../../../components';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
+import { INCOME_CATEGORIES } from '../../../../constants/IncomeCategoryConstants';
 
 type DraftAllocation = { id: string; fundId: string; amount: number };
 
 const IncomeSourcesScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const { funds, isLoading: isLoadingFunds, refresh } = useFunds();
-  const { presets, isLoading: isLoadingPresets, reload, savePresets } = useIncomePresets();
-
-  const [isLoading, setIsLoading] = useState(true);
+  const { funds, isLoading: isLoadingFunds } = useFunds();
+  const { presets, isLoading: isLoadingPresets, savePresets } = useIncomePresets();
 
   const [modalVisible, setModalVisible] = useState(false);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
+  const [draftCategoryId, setDraftCategoryId] = useState<string>('');
   const [draftAllocations, setDraftAllocations] = useState<DraftAllocation[]>([]);
   const [activeDraftAllocationId, setActiveDraftAllocationId] = useState<string>('');
+  const [categoryInitialExpanded, setCategoryInitialExpanded] = useState(false);
 
   const fundsDefaultFirst = useMemo(() => {
     return [...funds].sort((a, b) => {
@@ -51,26 +52,14 @@ const IncomeSourcesScreen: React.FC = () => {
     });
   }, [funds]);
 
-  const load = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      await refresh();
-      await reload();
-    } finally {
-      setIsLoading(false);
-    }
-  }, [refresh]);
-
-  useEffect(() => {
-    load();
-  }, [load]);
-
   const openCreate = () => {
     const id = `${Date.now()}_${Math.random().toString(16).slice(2)}`;
     setEditingPresetId(null);
     setDraftName('');
+    setDraftCategoryId('');
     setDraftAllocations([{ id, fundId: '', amount: 0 }]);
     setActiveDraftAllocationId(id);
+    setCategoryInitialExpanded(false);
     setModalVisible(true);
   };
 
@@ -83,8 +72,14 @@ const IncomeSourcesScreen: React.FC = () => {
     const firstId = next[0]?.id ?? '';
     setEditingPresetId(preset.id);
     setDraftName(preset.name ?? '');
+    setDraftCategoryId(preset.categoryId ?? '');
     setDraftAllocations(next.length ? next : [{ id: firstId, fundId: '', amount: 0 }]);
     setActiveDraftAllocationId(firstId);
+    // Nếu category đã chọn nằm ngoài 5 mục đầu → mở sẵn CategoryPicker để user thấy.
+    const needsExpanded =
+      !!preset.categoryId &&
+      !INCOME_CATEGORIES.slice(0, 5).some((c) => c.id === preset.categoryId);
+    setCategoryInitialExpanded(needsExpanded);
     setModalVisible(true);
   };
 
@@ -92,8 +87,10 @@ const IncomeSourcesScreen: React.FC = () => {
     setModalVisible(false);
     setEditingPresetId(null);
     setDraftName('');
+    setDraftCategoryId('');
     setDraftAllocations([]);
     setActiveDraftAllocationId('');
+    setCategoryInitialExpanded(false);
   }, []);
 
   const exitApp = useCallback(() => {
@@ -168,6 +165,7 @@ const IncomeSourcesScreen: React.FC = () => {
     const nextPreset: IncomePreset = {
       id: presetId,
       name,
+      ...(draftCategoryId ? { categoryId: draftCategoryId } : {}),
       allocations: draftAllocations.map((a) => ({
         fundId: a.fundId,
         amount: Math.round(a.amount),
@@ -204,6 +202,9 @@ const IncomeSourcesScreen: React.FC = () => {
   };
 
   const renderPreset = (p: IncomePreset) => {
+    const category = p.categoryId
+      ? INCOME_CATEGORIES.find((c) => c.id === p.categoryId)
+      : undefined;
     return (
       <View key={p.id} style={styles.swipeableWrapper}>
         <SwipeableRow
@@ -218,6 +219,22 @@ const IncomeSourcesScreen: React.FC = () => {
           <View style={styles.presetHeader}>
             <View style={styles.presetTitleRow}>
               <Text style={styles.presetTitle}>{p.name}</Text>
+              {category && (
+                <View
+                  style={[
+                    styles.presetCategoryBadge,
+                    { backgroundColor: category.color + '20' },
+                  ]}
+                >
+                  {(() => {
+                    const CatIcon = category.icon;
+                    return <CatIcon width={12} height={12} color={category.color} />;
+                  })()}
+                  <Text style={[styles.presetCategoryText, { color: category.color }]} numberOfLines={1}>
+                    {category.name}
+                  </Text>
+                </View>
+              )}
             </View>
           </View>
 
@@ -274,7 +291,7 @@ const IncomeSourcesScreen: React.FC = () => {
         <View style={{ width: 40 }} />
       </View>
 
-      {isLoading || isLoadingFunds || isLoadingPresets ? (
+      {isLoadingFunds || isLoadingPresets ? (
         <View style={styles.loadingWrap}>
           <ActivityIndicator color={colors.primary} />
         </View>
@@ -479,6 +496,18 @@ const IncomeSourcesScreen: React.FC = () => {
                 <Text style={styles.addAllocationText}>+ Thêm quỹ</Text>
               </TouchableOpacity>
             </View>
+
+            <View style={styles.categorySectionHeader}>
+              <Text style={styles.inputLabel}>Danh mục thu nhập</Text>
+              <Text style={styles.categoryOptional}>(không bắt buộc)</Text>
+            </View>
+            <CategoryPicker
+              categories={INCOME_CATEGORIES}
+              value={draftCategoryId}
+              onChange={setDraftCategoryId}
+              allowDeselect
+              initialShowAll={categoryInitialExpanded}
+            />
           </ScrollView>
 
           <View style={styles.modalButtons}>
@@ -547,6 +576,19 @@ const styles = StyleSheet.create({
   presetHeader: { gap: 10 },
   presetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   presetTitle: { flex: 1, fontSize: 16, fontWeight: '800', color: colors.text },
+  presetCategoryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 10,
+    maxWidth: 140,
+  },
+  presetCategoryText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
   presetActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   actionBtn: { paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12 },
   actionBtnSecondary: { backgroundColor: colors.backgroundSecondary },
@@ -593,6 +635,19 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   modalSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  categorySectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    marginBottom: 8,
+  },
+  categoryOptional: {
+    fontSize: 11,
+    fontWeight: '500',
+    color: colors.textLight,
+    fontStyle: 'italic',
+  },
   percentTotal: { fontSize: 13, fontWeight: '900' },
   percentOk: { color: colors.success },
   percentBad: { color: colors.error },

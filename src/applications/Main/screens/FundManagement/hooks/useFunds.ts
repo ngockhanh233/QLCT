@@ -258,7 +258,7 @@ function useFundsInternal(): FundsContextValue {
         return null;
       }
     },
-    [userId, loadFunds],
+    [userId, loadFunds, funds],
   );
 
   const updateFund = useCallback(

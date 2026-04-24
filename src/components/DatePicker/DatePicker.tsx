@@ -172,6 +172,7 @@ const DatePicker: React.FC<DatePickerProps> = ({
       <Calendar
         key={formatDateForCalendar(currentMonth)}
         current={formatDateForCalendar(currentMonth)}
+        firstDay={1}
         onDayPress={onDayPress}
         onMonthChange={(month: any) => {
           setCurrentMonth(new Date(month.year, month.month - 1, 1));

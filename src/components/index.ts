@@ -1,5 +1,8 @@
 export { default as DatePicker } from './DatePicker';
+export { default as TimePicker } from './TimePicker';
 export { default as CurrencyInput } from './CurrencyInput';
+export { default as CategoryPicker } from './CategoryPicker';
+export type { CategoryPickerItem } from './CategoryPicker';
 export { SwipeableRow } from './SwipeableRow';
 export { default as ConfirmProvider } from './ConfirmDialog/ConfirmProvider';
 export { default as SnackbarProvider } from './Snackbar/SnackbarProvider';

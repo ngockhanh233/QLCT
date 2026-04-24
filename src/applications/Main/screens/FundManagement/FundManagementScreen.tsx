@@ -159,6 +159,24 @@ const FundManagementScreen: React.FC = () => {
     }
   }, [topUpModalVisible, topUpFundItem, topUpSourceFundId, defaultFund]);
 
+  // Nếu quỹ nguồn đang chọn không còn đủ số dư (user vừa nhập số lớn hơn) → bỏ chọn.
+  useEffect(() => {
+    if (!useSourceFundForInitial || !newFundSourceId) return;
+    const picked = funds.find((f) => f.id === newFundSourceId);
+    if (picked && (picked.balance ?? 0) < fundBalance) {
+      setNewFundSourceId('');
+    }
+  }, [fundBalance, newFundSourceId, useSourceFundForInitial, funds]);
+
+  // Nạp tiền: nếu quỹ nguồn đang chọn không đủ so với số tiền nạp → bỏ chọn.
+  useEffect(() => {
+    if (!useSourceFundForTopUp || !topUpSourceFundId) return;
+    const picked = funds.find((f) => f.id === topUpSourceFundId);
+    if (picked && (picked.balance ?? 0) < topUpAmount) {
+      setTopUpSourceFundId('');
+    }
+  }, [topUpAmount, topUpSourceFundId, useSourceFundForTopUp, funds]);
+
   const handleSaveFund = async () => {
     const name = fundName.trim();
     if (!name) {
@@ -883,6 +901,7 @@ const FundManagementScreen: React.FC = () => {
                       {fundsDefaultFirst.map((fund) => {
                         const isSelected = newFundSourceId === fund.id;
                         const fColor = fund.color ?? colors.primary;
+                        const isInsufficient = (fund.balance ?? 0) < fundBalance;
                         return (
                           <TouchableOpacity
                             key={fund.id}
@@ -890,9 +909,11 @@ const FundManagementScreen: React.FC = () => {
                               styles.sheetFundItem,
                               isSelected && styles.sheetFundItemActive,
                               isSelected && { borderColor: fColor },
+                              isInsufficient && styles.sheetFundItemDisabled,
                             ]}
                             onPress={() => setNewFundSourceId(fund.id)}
                             activeOpacity={0.75}
+                            disabled={isInsufficient}
                           >
                             <View
                               style={[
@@ -917,6 +938,11 @@ const FundManagementScreen: React.FC = () => {
                             <Text style={styles.sheetFundBalance}>
                               {fund.balance.toLocaleString('vi-VN')}đ
                             </Text>
+                            {isInsufficient && (
+                              <Text style={styles.sheetFundInsufficient}>
+                                Không đủ
+                              </Text>
+                            )}
                           </TouchableOpacity>
                         );
                       })}
@@ -1068,6 +1094,7 @@ const FundManagementScreen: React.FC = () => {
                 .map((fund) => {
                   const isSelected = topUpSourceFundId === fund.id;
                   const fundColor = fund.color ?? colors.primary;
+                  const isInsufficient = (fund.balance ?? 0) < topUpAmount;
                   return (
                     <TouchableOpacity
                       key={fund.id}
@@ -1075,9 +1102,11 @@ const FundManagementScreen: React.FC = () => {
                         styles.sourceFundItem,
                         isSelected && styles.sourceFundItemActive,
                         isSelected && { borderColor: fundColor },
+                        isInsufficient && styles.sourceFundItemDisabled,
                       ]}
                       onPress={() => setTopUpSourceFundId(fund.id)}
                       activeOpacity={0.7}
+                      disabled={isInsufficient}
                     >
                       <View style={[styles.sourceFundIcon, { backgroundColor: fundColor + '20' }]}>
                         {(() => {
@@ -1094,6 +1123,9 @@ const FundManagementScreen: React.FC = () => {
                       <Text style={styles.sourceFundBalance}>
                         {fund.balance.toLocaleString('vi-VN')}đ
                       </Text>
+                      {isInsufficient && (
+                        <Text style={styles.sourceFundInsufficient}>Không đủ</Text>
+                      )}
                     </TouchableOpacity>
                   );
                 })}
@@ -1408,6 +1440,15 @@ const styles = StyleSheet.create({
   sourceFundItemActive: {
     borderWidth: 2,
   },
+  sourceFundItemDisabled: {
+    opacity: 0.45,
+  },
+  sourceFundInsufficient: {
+    marginTop: 2,
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.error,
+  },
   sourceFundIcon: {
     width: 32,
     height: 32,
@@ -1563,6 +1604,15 @@ const styles = StyleSheet.create({
   },
   sheetFundItemActive: {
     backgroundColor: colors.white,
+  },
+  sheetFundItemDisabled: {
+    opacity: 0.45,
+  },
+  sheetFundInsufficient: {
+    marginTop: 4,
+    fontSize: 10,
+    fontWeight: '600',
+    color: colors.error,
   },
   sheetFundIcon: {
     width: 36,
