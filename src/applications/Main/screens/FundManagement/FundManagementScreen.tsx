@@ -21,6 +21,7 @@ import { useFunds } from './hooks/useFunds';
 import { CurrencyInput, SwipeableRow, ErrorPopup } from '../../../../components';
 import { confirm } from '../../../../utils/confirm';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
+import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../MainScreen';
 import type { FundRecord } from '../../../../types/fund';
@@ -60,6 +61,7 @@ const FundManagementScreen: React.FC = () => {
     setDefaultFund,
   } = useFunds();
   const { presets: incomePresets, savePresets } = useIncomePresets();
+  const { maskAmount } = useBalanceVisibility();
 
   // Khi chuyển qua tab Quỹ, luôn refresh để cập nhật số dư mới nhất
   // (ví dụ vừa xóa giao dịch ở tab Giao dịch).
@@ -454,7 +456,7 @@ const FundManagementScreen: React.FC = () => {
                         )}
                       </View>
                       <Text style={styles.fundBalance}>
-                        {fund.balance.toLocaleString('vi-VN')}đ
+                        {maskAmount(fund.balance ?? 0)}
                       </Text>
                       {fund.isDefault && (
                         <Text style={styles.defaultHint}>

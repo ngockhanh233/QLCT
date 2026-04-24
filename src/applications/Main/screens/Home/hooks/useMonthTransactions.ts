@@ -23,6 +23,7 @@ interface TransactionRecord {
   amount: number;
   type: 'income' | 'expense';
   transactionDate: Date;
+  isLoanMovement?: boolean;
 }
 
 const firestoreInstance = getFirestore(getApp());
@@ -92,11 +93,12 @@ async function fetchMonthSummary(userId: string): Promise<MonthSummary> {
       amount: (data.amount as number) ?? 0,
       type: data.type as 'income' | 'expense',
       transactionDate: date,
+      isLoanMovement: data.isLoanMovement === true,
     };
   });
 
-  // snapshot đã được filter theo tháng trên server, nên items chính là tập giao dịch của tháng hiện tại
-  const thisMonth = items;
+  // Loại các giao dịch vay/nợ khỏi thống kê thu/chi (coi là biến động tài sản, không phải income/expense).
+  const thisMonth = items.filter((t) => t.isLoanMovement !== true);
 
   let totalIncome = 0;
   let totalExpense = 0;

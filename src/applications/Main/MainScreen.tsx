@@ -5,9 +5,13 @@ import { ActivityIndicator, View } from 'react-native';
 import { colors } from '../../utils/color';
 import { HomeDataChangedProvider } from '../../contexts/HomeDataChangedContext';
 import { IncomePresetsProvider } from '../../contexts/IncomePresetsContext';
+import { DebtsProvider } from '../../contexts/DebtsContext';
+import { BalanceVisibilityProvider } from '../../contexts/BalanceVisibilityContext';
 import { FundsProvider } from './screens/FundManagement/hooks/useFunds';
 import BottomTabNavigator from './BottomTabNavigator';
 import { AddTransactionScreen, DefaultFundSetupScreen, FinanceReportScreen, FundManagementScreen, IncomeSourcesScreen, NotificationsScreen } from './screens';
+import DebtsScreen from './screens/Debts/DebtsScreen';
+import DebtDetailScreen from './screens/Debts/DebtDetailScreen';
 import SpendingCategoryDetailScreen from './screens/SpendingCategoryDetail/SpendingCategoryDetailScreen';
 import { getStoredUser, setStoredUser } from '../../services';
 import { getDefaultFundIfExists } from './screens/FundManagement/hooks/useFunds';
@@ -38,6 +42,8 @@ export type RootStackParamList = {
     | undefined;
   FundManagement: undefined;
   IncomeSources: undefined;
+  Debts: undefined;
+  DebtDetail: { debtId: string };
 };
 
 const linking: LinkingOptions<RootStackParamList> = {
@@ -51,6 +57,8 @@ const linking: LinkingOptions<RootStackParamList> = {
       Notifications: 'notifications',
       FundManagement: 'fund-management',
       IncomeSources: 'income-sources',
+      Debts: 'debts',
+      DebtDetail: 'debts/:debtId',
     },
   },
 };
@@ -115,6 +123,8 @@ const MainScreen: React.FC<MainScreenProps> = ({ onLogout }) => {
     <HomeDataChangedProvider>
       <FundsProvider>
         <IncomePresetsProvider>
+          <DebtsProvider>
+          <BalanceVisibilityProvider>
           <NavigationContainer linking={linking} key={navKey}>
           <Stack.Navigator screenOptions={{ headerShown: false }}>
             {needsDefaultFundSetup ? (
@@ -178,10 +188,28 @@ const MainScreen: React.FC<MainScreenProps> = ({ onLogout }) => {
                     animation: 'slide_from_right',
                   }}
                 />
+                <Stack.Screen
+                  name="Debts"
+                  component={DebtsScreen}
+                  options={{
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                  }}
+                />
+                <Stack.Screen
+                  name="DebtDetail"
+                  component={DebtDetailScreen}
+                  options={{
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                  }}
+                />
               </>
             )}
           </Stack.Navigator>
           </NavigationContainer>
+          </BalanceVisibilityProvider>
+          </DebtsProvider>
         </IncomePresetsProvider>
       </FundsProvider>
     </HomeDataChangedProvider>

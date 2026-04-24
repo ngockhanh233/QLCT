@@ -7,6 +7,8 @@ import AddIcon from '../../../../../../assets/icons/AddIcon';
 import BudgetIcon from '../../../../../../assets/icons/BudgetIcon';
 import WalletIcon from '../../../../../../assets/icons/WalletIcon';
 import BellIcon from '../../../../../../assets/icons/BellIcon';
+import EyeIcon from '../../../../../../assets/icons/EyeIcon';
+import EyeSlashIcon from '../../../../../../assets/icons/EyeSlashIcon';
 import { getStoredUser } from '../../../../../../services';
 import {
   getBalanceNotificationsUnreadCount,
@@ -15,6 +17,8 @@ import {
 } from '../../../../../../services/balanceNotifications';
 import React, { useEffect, useRef, useState } from 'react';
 import PiggyBankIcon from '../../../../../../assets/icons/PiggyBankIcon';
+
+const MASKED_VALUE = '••••••';
 
 function formatMoney(amount: number): string {
   return `${amount.toLocaleString('vi-VN')}đ`;
@@ -27,6 +31,8 @@ interface HeaderSectionProps {
   balance: number;
   totalIncome: number;
   totalExpense: number;
+  hideBalance?: boolean;
+  onToggleHideBalance?: () => void;
   onQuickAdd?: () => void;
   onViewDetailStats?: () => void;
   onManageFund?: () => void;
@@ -39,6 +45,8 @@ const HeaderSection = ({
   balance,
   totalIncome,
   totalExpense,
+  hideBalance = false,
+  onToggleHideBalance,
   onQuickAdd,
   onViewDetailStats,
   onManageFund,
@@ -136,17 +144,37 @@ const HeaderSection = ({
       <View style={styles.cardPattern} />
 
       <View style={styles.cardContent}>
-        <Text style={styles.balanceLabel}>Số dư còn lại</Text>
-        <Text style={styles.balanceAmount}>{formatMoney(balance)}</Text>
+        <View style={styles.balanceHeaderRow}>
+          <Text style={styles.balanceLabel}>Số dư còn lại</Text>
+          <TouchableOpacity
+            onPress={onToggleHideBalance}
+            style={styles.eyeButton}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            {hideBalance ? (
+              <EyeSlashIcon width={18} height={18} color={colors.white} />
+            ) : (
+              <EyeIcon width={18} height={18} color={colors.white} />
+            )}
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.balanceAmount}>
+          {hideBalance ? MASKED_VALUE : formatMoney(balance)}
+        </Text>
 
         <View style={styles.statsRow}>
           <View style={styles.statItem}>
             <Text style={styles.statLabel}>TỔNG THU THÁNG</Text>
-            <Text style={styles.statAmount}>{formatMoney(totalIncome)}</Text>
+            <Text style={styles.statAmount}>
+              {hideBalance ? MASKED_VALUE : formatMoney(totalIncome)}
+            </Text>
           </View>
           <View style={styles.statItem}>
             <Text style={styles.statLabel}>TỔNG CHI THÁNG</Text>
-            <Text style={styles.statAmountExpense}>{formatMoney(totalExpense)}</Text>
+            <Text style={styles.statAmountExpense}>
+              {hideBalance ? MASKED_VALUE : formatMoney(totalExpense)}
+            </Text>
           </View>
         </View>
       </View>
@@ -303,6 +331,14 @@ const styles = StyleSheet.create({
   },
   cardContent: {
     zIndex: 1,
+  },
+  balanceHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  eyeButton: {
+    padding: 4,
   },
   balanceLabel: {
     fontSize: 13,

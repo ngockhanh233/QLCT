@@ -24,6 +24,8 @@ const YEARS_TO_KEEP = 3;
 
 /**
  * Xóa transaction có transactionDate **trước** mốc `deleteIfBefore` (không xóa đúng ngày mốc).
+ * Giữ lại các tx vay/nợ (`isLoanMovement === true`) vì chúng gắn với doc `debts/*`
+ * trong DebtsContext — xóa sẽ phá vỡ lịch sử khoản nợ.
  */
 async function deleteOldTransactionsForUser(
   userId: string,
@@ -48,6 +50,10 @@ async function deleteOldTransactionsForUser(
 
   snapshot.forEach((docSnap: FirebaseFirestoreTypes.QueryDocumentSnapshot) => {
     const data = docSnap.data();
+
+    // Bỏ qua giao dịch vay/nợ — lịch sử khoản nợ phải giữ để còn đối chiếu.
+    if (data.isLoanMovement === true) return;
+
     const ts = data.transactionDate as
       | FirebaseFirestoreTypes.Timestamp
       | Date

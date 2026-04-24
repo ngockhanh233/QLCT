@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Switch } from 'react-native';
 import { DatePicker } from '../../../../../components';
 import { colors } from '../../../../../utils/color';
 import type { TransactionTimeFilter } from '../hooks/useTransactions';
@@ -22,6 +22,10 @@ interface TransactionFilterPanelProps {
   onFromDateChange: (date: Date) => void;
   onToDateChange: (date: Date) => void;
   onResetFilters: () => void;
+  /** Toggle hiện/ẩn giao dịch vay nợ trong danh sách (chỉ dùng ở tab Thu chi). */
+  loanToggleVisible?: boolean;
+  showLoan?: boolean;
+  onShowLoanChange?: (next: boolean) => void;
 }
 
 const TransactionFilterPanel: React.FC<TransactionFilterPanelProps> = ({
@@ -38,6 +42,9 @@ const TransactionFilterPanel: React.FC<TransactionFilterPanelProps> = ({
   onFromDateChange,
   onToDateChange,
   onResetFilters,
+  loanToggleVisible = false,
+  showLoan = false,
+  onShowLoanChange,
 }) => {
   return (
     <View>
@@ -66,28 +73,47 @@ const TransactionFilterPanel: React.FC<TransactionFilterPanelProps> = ({
         </View>
       )}
 
-      <View style={styles.typeFilterRow}>
-        {typeFilters.map(filter => (
-          <TouchableOpacity
-            key={filter.key}
-            style={[
-              styles.typeFilterChip,
-              typeFilter === filter.key && styles.typeFilterChipActive,
-            ]}
-            onPress={() => onChangeTypeFilter(filter.key)}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.typeFilterChipText,
-                typeFilter === filter.key && styles.typeFilterChipTextActive,
-              ]}
-            >
-              {filter.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
+      {(typeFilters.length > 0 || loanToggleVisible) && (
+        <View style={styles.typeFilterRow}>
+          <View style={styles.typeFilterChipsGroup}>
+            {typeFilters.map(filter => (
+              <TouchableOpacity
+                key={filter.key}
+                style={[
+                  styles.typeFilterChip,
+                  typeFilter === filter.key && styles.typeFilterChipActive,
+                ]}
+                onPress={() => onChangeTypeFilter(filter.key)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.typeFilterChipText,
+                    typeFilter === filter.key && styles.typeFilterChipTextActive,
+                  ]}
+                >
+                  {filter.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {loanToggleVisible && (
+            <View style={styles.loanToggleWrap}>
+              <Text style={styles.loanToggleLabel}>Vay nợ</Text>
+              <Switch
+                value={showLoan}
+                onValueChange={onShowLoanChange}
+                thumbColor={colors.white}
+                trackColor={{
+                  false: colors.backgroundSecondary,
+                  true: colors.primary,
+                }}
+              />
+            </View>
+          )}
+        </View>
+      )}
 
       {dateFilterMode === 'single' && fromDate && (
         <View style={styles.dateFilterRow}>
@@ -150,9 +176,27 @@ const styles = StyleSheet.create({
   },
   typeFilterRow: {
     flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 20,
     marginBottom: 12,
     gap: 8,
+  },
+  typeFilterChipsGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 1,
+  },
+  loanToggleWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  loanToggleLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   filterTab: {
     flex: 1,

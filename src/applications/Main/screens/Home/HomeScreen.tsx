@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, StyleSheet, ScrollView, RefreshControl } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -11,6 +11,8 @@ import { HeaderSection, SpendingDistributionSection } from './components';
 import { Skeleton } from '../../../../components';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useMonthTransactions } from './hooks';
+import { useDebts } from '../../../../contexts/DebtsContext';
+import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
 
 const HomeScreen = () => {
   const insets = useSafeAreaInsets();
@@ -28,6 +30,10 @@ const HomeScreen = () => {
     isLoading: monthLoading,
     refresh: refreshMonth,
   } = useMonthTransactions();
+  const { totalsByDirection } = useDebts();
+  const hasDebtsActivity = totalsByDirection.lent > 0 || totalsByDirection.borrowed > 0;
+
+  const { hideBalance, toggle: toggleHideBalance, maskAmount } = useBalanceVisibility();
 
   const totalFundBalance = useMemo(() => {
     return funds.reduce((sum, f) => sum + (f.balance ?? 0), 0);
@@ -63,6 +69,10 @@ const HomeScreen = () => {
 
   const onViewDetailStats = useCallback(() => {
     (navigation.getParent() as { navigate: (name: 'FinanceReport') => void } | undefined)?.navigate('FinanceReport');
+  }, [navigation]);
+
+  const onOpenDebts = useCallback(() => {
+    (navigation.getParent() as { navigate: (name: 'Debts') => void } | undefined)?.navigate('Debts');
   }, [navigation]);
 
   const onCategoryDetail = useCallback(
@@ -167,10 +177,39 @@ const HomeScreen = () => {
               balance={totalFundBalance}
               totalIncome={totalIncome}
               totalExpense={totalExpense}
+              hideBalance={hideBalance}
+              onToggleHideBalance={toggleHideBalance}
               onQuickAdd={onQuickAdd}
               onViewDetailStats={onViewDetailStats}
               onManageFund={onManageFund}
             />
+            <TouchableOpacity
+              style={styles.debtsCard}
+              onPress={onOpenDebts}
+              activeOpacity={0.85}
+            >
+              <View style={styles.debtsHeader}>
+                <Text style={styles.debtsTitle}>Vay nợ</Text>
+                <Text style={styles.debtsHint}>
+                  {hasDebtsActivity ? 'Xem chi tiết →' : 'Ghi nhận →'}
+                </Text>
+              </View>
+              <View style={styles.debtsRow}>
+                <View style={styles.debtsCell}>
+                  <Text style={styles.debtsCellLabel}>Phải thu</Text>
+                  <Text style={[styles.debtsCellAmount, { color: colors.success }]}>
+                    {maskAmount(totalsByDirection.lent)}
+                  </Text>
+                </View>
+                <View style={styles.debtsDivider} />
+                <View style={styles.debtsCell}>
+                  <Text style={styles.debtsCellLabel}>Phải trả</Text>
+                  <Text style={[styles.debtsCellAmount, { color: colors.error }]}>
+                    {maskAmount(totalsByDirection.borrowed)}
+                  </Text>
+                </View>
+              </View>
+            </TouchableOpacity>
             <View style={styles.sectionBlock}>
               <SpendingDistributionSection
                 expenseByCategory={expenseByCategory}
@@ -202,6 +241,57 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.06,
     shadowRadius: 12,
     elevation: 1,
+  },
+  debtsCard: {
+    marginHorizontal: 20,
+    marginBottom: 16,
+    backgroundColor: colors.white,
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    elevation: 1,
+  },
+  debtsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  debtsTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  debtsHint: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  debtsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  debtsCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  debtsCellLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  debtsCellAmount: {
+    marginTop: 4,
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  debtsDivider: {
+    width: 1,
+    height: 34,
+    backgroundColor: colors.backgroundSecondary,
   },
   skeletonHeaderWrap: {
     paddingHorizontal: 20,

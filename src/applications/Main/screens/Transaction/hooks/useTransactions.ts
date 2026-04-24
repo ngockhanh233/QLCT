@@ -35,6 +35,9 @@ export interface TransactionRecord {
   transactionDate: Date;
   isSplitIncome?: boolean;
   incomeSplits?: { fundId: string; amount: number }[] | null;
+  /** Tx được tạo tự động khi tạo/ghi nhận trả khoản nợ. Lọc khỏi thống kê thu/chi. */
+  isLoanMovement?: boolean;
+  debtId?: string | null;
 }
 
 type DeleteTransactionResult = {
@@ -172,6 +175,8 @@ async function fetchAllTransactions(
       incomeSplits:
         (data.incomeSplits as { fundId: string; amount: number }[] | undefined) ??
         null,
+      isLoanMovement: data.isLoanMovement === true,
+      debtId: (data.debtId as string | undefined) ?? null,
     };
   });
 

@@ -70,13 +70,15 @@ const TimePicker: React.FC<TimePickerProps> = ({
   };
 
   const onHourScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-    setHour(Math.max(0, Math.min(23, idx)));
+    const offsetY = e.nativeEvent.contentOffset.y;
+    const idx = Math.max(0, Math.min(23, Math.round(offsetY / ITEM_HEIGHT)));
+    setHour(idx);
   };
 
   const onMinuteScrollEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const idx = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-    setMinute(Math.max(0, Math.min(59, idx)));
+    const offsetY = e.nativeEvent.contentOffset.y;
+    const idx = Math.max(0, Math.min(59, Math.round(offsetY / ITEM_HEIGHT)));
+    setMinute(idx);
   };
 
   const renderHourItem = useCallback<ListRenderItem<number>>(
@@ -156,7 +158,7 @@ const TimePicker: React.FC<TimePickerProps> = ({
                     index,
                   })}
                   showsVerticalScrollIndicator={false}
-                  snapToInterval={ITEM_HEIGHT}
+                  snapToOffsets={HOURS.map((_, i) => i * ITEM_HEIGHT)}
                   decelerationRate="fast"
                   onMomentumScrollEnd={onHourScrollEnd}
                   contentContainerStyle={styles.wheelContent}
@@ -178,7 +180,7 @@ const TimePicker: React.FC<TimePickerProps> = ({
                     index,
                   })}
                   showsVerticalScrollIndicator={false}
-                  snapToInterval={ITEM_HEIGHT}
+                  snapToOffsets={MINUTES.map((_, i) => i * ITEM_HEIGHT)}
                   decelerationRate="fast"
                   onMomentumScrollEnd={onMinuteScrollEnd}
                   contentContainerStyle={styles.wheelContent}
@@ -295,11 +297,14 @@ const styles = StyleSheet.create({
   },
   itemText: {
     fontSize: 20,
+    fontWeight: '500',
     color: colors.textSecondary,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
+    includeFontPadding: false,
   },
   itemTextSelected: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontWeight: '800',
     color: colors.text,
   },
   actions: {

@@ -13,6 +13,7 @@ import {
   Pressable,
   type LayoutChangeEvent,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { DatePicker, MonthPicker } from '../../../../components';
@@ -34,6 +35,31 @@ import { useFunds } from '../FundManagement/hooks/useFunds';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 import Svg, { Path } from 'react-native-svg';
 import TransactionFilterPanel from './components/TransactionFilterPanel';
+import { useDebts } from '../../../../contexts/DebtsContext';
+import WalletIcon from '../../../../assets/icons/WalletIcon';
+import CheckIcon from '../../../../assets/icons/CheckIcon';
+import { LOAN_CATEGORY_IDS, debtRemaining, type DebtRecord } from '../../../../services/debts';
+
+interface LoanGroupChild {
+  id: string;
+  amount: number;
+  type: 'income' | 'expense';
+  categoryId: string;
+  fundId: string | null;
+  dateLabel: string;
+  timeLabel: string;
+  rawDate: Date;
+  note: string;
+}
+
+interface LoanGroupData {
+  debtId: string;
+  counterparty: string;
+  direction: 'lent' | 'borrowed';
+  principal: number;
+  remaining: number;
+  children: LoanGroupChild[];
+}
 
 interface TransactionViewItem {
   id: string;
@@ -47,6 +73,11 @@ interface TransactionViewItem {
   dateLabel: string;
   timeLabel: string;
   rawDate: Date;
+  isLoanMovement?: boolean;
+  debtId?: string | null;
+  /** Khi true, item này là card gộp đại diện cho 1 khoản nợ (không phải tx thật). */
+  isLoanGroup?: boolean;
+  loanGroupData?: LoanGroupData;
 }
 
 type TransactionGroup = {
@@ -75,12 +106,21 @@ const TIME_FILTERS: { key: TransactionTimeFilter; label: string }[] = [
   { key: 'year', label: 'Năm' },
 ];
 
+const STORAGE_KEY_SHOW_LOAN_IN_LIST = 'transaction_show_loan_in_list';
+
 type TransactionKindFilter = 'all' | 'income' | 'expense';
+type MainTab = 'transactions' | 'debts';
+type LoanDirectionFilter = 'all' | 'lent' | 'borrowed';
 
 const TYPE_FILTERS: { key: TransactionKindFilter; label: string }[] = [
   { key: 'all', label: 'Tất cả' },
   { key: 'expense', label: 'Khoản chi' },
   { key: 'income', label: 'Khoản thu' },
+];
+
+const MAIN_TABS: { key: MainTab; label: string }[] = [
+  { key: 'transactions', label: 'Thu chi' },
+  { key: 'debts', label: 'Vay nợ' },
 ];
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<TransactionGroup>);
@@ -103,6 +143,33 @@ const TransactionScreen: React.FC = () => {
   const { markHomeDataChanged, getAndClearTransactionListNeedsRefresh } = useHomeDataChanged();
   const [activeFilter, setActiveFilter] = useState<TransactionTimeFilter>('month');
   const [typeFilter, setTypeFilter] = useState<TransactionKindFilter>('all');
+  const [mainTab, setMainTab] = useState<MainTab>('transactions');
+  const [showLoanInList, setShowLoanInList] = useState(false);
+  const [loanDirectionFilter, setLoanDirectionFilter] = useState<LoanDirectionFilter>('all');
+
+  // Load persisted switch state lúc mount.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(STORAGE_KEY_SHOW_LOAN_IN_LIST)
+      .then((v) => {
+        if (!cancelled && v === 'true') setShowLoanInList(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setShowLoanInListPersisted = useCallback((next: boolean) => {
+    setShowLoanInList(next);
+    AsyncStorage.setItem(STORAGE_KEY_SHOW_LOAN_IN_LIST, next ? 'true' : 'false').catch(
+      () => {},
+    );
+  }, []);
+  const [deleteDebtTarget, setDeleteDebtTarget] = useState<DebtRecord | null>(null);
+  const [deleteDebtFundId, setDeleteDebtFundId] = useState<string>('');
+  const [deleteDebtOffsetId, setDeleteDebtOffsetId] = useState<string>('');
+  const [isDeletingDebt, setIsDeletingDebt] = useState(false);
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [filterModeModalVisible, setFilterModeModalVisible] = useState(false);
   const {
@@ -122,6 +189,12 @@ const TransactionScreen: React.FC = () => {
   } = useTransactions();
 
   const { funds, refresh: refreshFunds, transferToFund } = useFunds();
+  const { debts, deleteDebt: deleteDebtFromCtx } = useDebts();
+  const debtById = useMemo(() => {
+    const map = new Map<string, typeof debts[number]>();
+    debts.forEach((d) => map.set(d.id, d));
+    return map;
+  }, [debts]);
   const fundNameById = useMemo(() => {
     const m = new Map<string, string>();
     funds.forEach(f => {
@@ -434,12 +507,27 @@ const TransactionScreen: React.FC = () => {
 
   const viewItems: TransactionViewItem[] = useMemo(() => {
     const byTime = applyTimeFilter(transactions);
-    const byType =
-      typeFilter === 'all'
+    // mainTab 'debts' → chỉ giao dịch vay/nợ.
+    // mainTab 'transactions':
+    //   - Mặc định: loại tx vay/nợ khỏi list; nếu `showLoanInList` bật mới bao gồm.
+    //   - 'all' / 'income' / 'expense' áp dụng theo type trên tập đã lọc vay/nợ ở trên.
+    let byKind: TransactionRecord[];
+    if (mainTab === 'debts') {
+      byKind = byTime.filter(t => {
+        if (t.isLoanMovement !== true) return false;
+        if (loanDirectionFilter === 'all') return true;
+        const debt = t.debtId ? debtById.get(t.debtId) : undefined;
+        return debt?.direction === loanDirectionFilter;
+      });
+    } else {
+      const base = showLoanInList
         ? byTime
-        : byTime.filter(t => t.type === typeFilter);
+        : byTime.filter(t => t.isLoanMovement !== true);
+      byKind =
+        typeFilter === 'all' ? base : base.filter(t => t.type === typeFilter);
+    }
 
-    return byType.map(t => ({
+    const toViewItem = (t: TransactionRecord): TransactionViewItem => ({
       id: t.id,
       categoryId: t.categoryId,
       amount: t.amount,
@@ -451,34 +539,114 @@ const TransactionScreen: React.FC = () => {
       dateLabel: formatDateLabel(t.transactionDate),
       timeLabel: formatTimeLabel(t.transactionDate),
       rawDate: t.transactionDate,
-    }));
-  }, [transactions, activeFilter, typeFilter]);
+      isLoanMovement: t.isLoanMovement === true,
+      debtId: t.debtId ?? null,
+    });
 
-  const totalIncome = useMemo(
-    () =>
-      transactions
-        .filter(t => t.type === 'income')
-        .reduce((sum, t) => sum + t.amount, 0),
-    [transactions],
-  );
+    // Gộp tx vay/nợ thành 1 big card theo debtId.
+    const regularTxs = byKind.filter(t => t.isLoanMovement !== true);
+    const loanTxs = byKind.filter(t => t.isLoanMovement === true);
 
-  const totalExpense = useMemo(
-    () =>
-      transactions
-        .filter(t => t.type === 'expense')
-        .reduce((sum, t) => sum + t.amount, 0),
-    [transactions],
-  );
+    const regularItems: TransactionViewItem[] = regularTxs.map(toViewItem);
+
+    const loanGroupMap = new Map<string, TransactionRecord[]>();
+    for (const tx of loanTxs) {
+      const key = tx.debtId ?? `__orphan_${tx.id}`;
+      const arr = loanGroupMap.get(key);
+      if (arr) arr.push(tx);
+      else loanGroupMap.set(key, [tx]);
+    }
+
+    const loanGroupItems: TransactionViewItem[] = Array.from(
+      loanGroupMap.entries(),
+    ).map(([groupKey, txs]) => {
+      const sortedTxs = [...txs].sort(
+        (a, b) => b.transactionDate.getTime() - a.transactionDate.getTime(),
+      );
+      const latestTx = sortedTxs[0];
+      const debtId = groupKey.startsWith('__orphan_') ? '' : groupKey;
+      const debt = debtId ? debtById.get(debtId) : undefined;
+
+      const children: LoanGroupChild[] = sortedTxs.map(t => ({
+        id: t.id,
+        amount: t.amount,
+        type: t.type,
+        categoryId: t.categoryId,
+        fundId: t.fundId ?? null,
+        dateLabel: formatDateLabel(t.transactionDate),
+        timeLabel: formatTimeLabel(t.transactionDate),
+        rawDate: t.transactionDate,
+        note: t.note ?? '',
+      }));
+
+      return {
+        id: `loan_group_${groupKey}`,
+        categoryId: 'loan_group',
+        amount: 0,
+        type: 'income',
+        note: '',
+        fundId: null,
+        isSplitIncome: false,
+        incomeSplits: null,
+        dateLabel: formatDateLabel(latestTx.transactionDate),
+        timeLabel: formatTimeLabel(latestTx.transactionDate),
+        rawDate: latestTx.transactionDate,
+        isLoanMovement: false,
+        debtId: null,
+        isLoanGroup: true,
+        loanGroupData: {
+          debtId,
+          counterparty: debt?.counterparty ?? 'Khoản vay',
+          direction: debt?.direction ?? 'lent',
+          principal: debt?.principal ?? 0,
+          remaining: debt ? debtRemaining(debt) : 0,
+          children,
+        },
+      };
+    });
+
+    const all = [...regularItems, ...loanGroupItems];
+    all.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
+    return all;
+  }, [transactions, activeFilter, typeFilter, mainTab, showLoanInList, loanDirectionFilter, debtById]);
+
+  // totalIncome/Expense scope:
+  //  - mainTab 'debts': chỉ tx vay/nợ
+  //  - mainTab 'transactions':
+  //      showLoanInList ON  → bao gồm cả tx vay/nợ vào tổng thu/chi
+  //      showLoanInList OFF → chỉ tx thường
+  const totalIncome = useMemo(() => {
+    let scope: TransactionRecord[];
+    if (mainTab === 'debts') {
+      scope = transactions.filter(t => t.isLoanMovement === true);
+    } else {
+      scope = showLoanInList
+        ? transactions
+        : transactions.filter(t => t.isLoanMovement !== true);
+    }
+    return scope
+      .filter(t => t.type === 'income')
+      .reduce((sum, t) => sum + t.amount, 0);
+  }, [transactions, mainTab, showLoanInList]);
+
+  const totalExpense = useMemo(() => {
+    let scope: TransactionRecord[];
+    if (mainTab === 'debts') {
+      scope = transactions.filter(t => t.isLoanMovement === true);
+    } else {
+      scope = showLoanInList
+        ? transactions
+        : transactions.filter(t => t.isLoanMovement !== true);
+    }
+    return scope
+      .filter(t => t.type === 'expense')
+      .reduce((sum, t) => sum + t.amount, 0);
+  }, [transactions, mainTab, showLoanInList]);
 
   const netAmount = useMemo(() => {
-    // NET thể hiện luồng ròng theo filter đang xem.
-    // - all: Thu - Chi
-    // - income: +Thu
-    // - expense: -Chi
-    if (typeFilter === 'income') return totalIncome;
-    if (typeFilter === 'expense') return -totalExpense;
+    // NET luôn là tổng thu - chi trong scope tab, không bị chip filter tác động.
     return totalIncome - totalExpense;
-  }, [typeFilter, totalIncome, totalExpense]);
+  }, [totalIncome, totalExpense]);
 
   const groupedByDate: TransactionGroup[] = useMemo(() => {
     const groups: { [key: string]: TransactionViewItem[] } = {};
@@ -493,15 +661,304 @@ const TransactionScreen: React.FC = () => {
     return Object.entries(groups).map(([date, items]) => ({
       date,
       transactions: items,
-      total: items.reduce(
-        (sum, t) => sum + (t.type === 'expense' ? -t.amount : t.amount),
-        0,
-      ),
+      // Daily total loại loan group (card gộp không phải luồng tiền thực của ngày).
+      total: items.reduce((sum, t) => {
+        if (t.isLoanGroup) return sum;
+        return sum + (t.type === 'expense' ? -t.amount : t.amount);
+      }, 0),
     }));
   }, [viewItems]);
 
 
+  const renderLoanTransactionItem = (item: TransactionViewItem) => {
+    const debt = item.debtId ? debtById.get(item.debtId) : undefined;
+    const counterparty = debt?.counterparty ?? 'Khoản vay/nợ';
+
+    let loanLabel = 'Vay/Nợ';
+    let accentColor = colors.primary;
+    switch (item.categoryId) {
+      case LOAN_CATEGORY_IDS.lent:
+        loanLabel = 'Cho vay';
+        accentColor = colors.error;
+        break;
+      case LOAN_CATEGORY_IDS.borrowed:
+        loanLabel = 'Đi vay';
+        accentColor = colors.success;
+        break;
+      case LOAN_CATEGORY_IDS.repayReceived:
+        loanLabel = 'Thu nợ';
+        accentColor = colors.success;
+        break;
+      case LOAN_CATEGORY_IDS.repayPaid:
+        loanLabel = 'Trả nợ';
+        accentColor = colors.error;
+        break;
+    }
+
+    const fundLabel = (() => {
+      if (item.fundId && fundNameById.has(item.fundId)) {
+        return `Quỹ: ${fundNameById.get(item.fundId) ?? 'Quỹ'}`;
+      }
+      return 'Quỹ: Quỹ đã bị xóa';
+    })();
+
+    return (
+      <View style={styles.transactionItem}>
+        <View style={[styles.transactionIcon, { backgroundColor: accentColor + '15' }]}>
+          <WalletIcon width={22} height={22} color={accentColor} />
+        </View>
+        <View style={styles.transactionInfo}>
+          <View style={styles.loanTitleRow}>
+            <Text style={styles.transactionCategory} numberOfLines={1}>
+              {counterparty}
+            </Text>
+            <View style={[styles.loanBadge, { backgroundColor: accentColor + '20' }]}>
+              <Text style={[styles.loanBadgeText, { color: accentColor }]}>{loanLabel}</Text>
+            </View>
+          </View>
+          {!!item.note && (
+            <Text style={styles.transactionNote} numberOfLines={1}>
+              {item.note}
+            </Text>
+          )}
+          <Text
+            style={[
+              styles.transactionFund,
+              fundLabel.includes('Quỹ đã bị xóa') && { color: colors.error + '90' },
+            ]}
+            numberOfLines={1}
+          >
+            {fundLabel}
+          </Text>
+        </View>
+        <View style={styles.transactionRight}>
+          <Text
+            style={[
+              styles.transactionAmount,
+              { color: item.type === 'income' ? colors.success : colors.error },
+            ]}
+          >
+            {formatAmount(item.amount, item.type)}
+          </Text>
+          <Text style={styles.transactionTime}>{item.timeLabel}</Text>
+        </View>
+      </View>
+    );
+  };
+
+  const openDeleteDebtModal = (debt: DebtRecord) => {
+    setDeleteDebtTarget(debt);
+    setDeleteDebtFundId(debt.fundId || fundsDefaultFirst[0]?.id || '');
+    setDeleteDebtOffsetId('');
+  };
+
+  const closeDeleteDebtModal = useCallback(() => {
+    if (isDeletingDebt) return;
+    setDeleteDebtTarget(null);
+    setDeleteDebtFundId('');
+    setDeleteDebtOffsetId('');
+  }, [isDeletingDebt]);
+
+  const handleConfirmDeleteDebt = async () => {
+    if (!deleteDebtTarget) return;
+    const rem = debtRemaining(deleteDebtTarget);
+    if (rem > 0 && !deleteDebtFundId) {
+      showErrorModal('Lỗi', 'Vui lòng chọn quỹ');
+      return;
+    }
+    setIsDeletingDebt(true);
+    try {
+      await deleteDebtFromCtx(
+        deleteDebtTarget.id,
+        rem > 0
+          ? {
+              refundFundId: deleteDebtFundId,
+              offsetSourceFundId: deleteDebtOffsetId || undefined,
+            }
+          : undefined,
+      );
+      setDeleteDebtTarget(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Không thể xóa';
+      showErrorModal('Lỗi', msg);
+    } finally {
+      setIsDeletingDebt(false);
+    }
+  };
+
+  const renderLoanGroupItem = (item: TransactionViewItem) => {
+    const data = item.loanGroupData;
+    if (!data) return null;
+    const isLent = data.direction === 'lent';
+    const accentColor = isLent ? colors.success : colors.error;
+    const paid = data.principal - data.remaining;
+    const pct = data.principal > 0 ? Math.min(100, (paid / data.principal) * 100) : 0;
+    const isSettled = data.remaining <= 0 && data.principal > 0;
+
+    const childLabel = (catId: string): string => {
+      switch (catId) {
+        case LOAN_CATEGORY_IDS.lent:
+          return 'Cho vay';
+        case LOAN_CATEGORY_IDS.borrowed:
+          return 'Đi vay';
+        case LOAN_CATEGORY_IDS.repayReceived:
+          return 'Thu';
+        case LOAN_CATEGORY_IDS.repayPaid:
+          return 'Trả';
+        default:
+          return 'Giao dịch';
+      }
+    };
+
+    const openDetail = () => {
+      if (data.debtId) {
+        navigation.navigate('DebtDetail', { debtId: data.debtId });
+      }
+    };
+
+    const debtForSwipe = data.debtId ? debtById.get(data.debtId) : undefined;
+
+    return (
+      <SwipeableRow
+        onDelete={
+          debtForSwipe ? () => openDeleteDebtModal(debtForSwipe) : undefined
+        }
+        deleteText="Xóa"
+        borderRadius={14}
+        buttonWidth={70}
+      >
+      <TouchableOpacity
+        style={styles.loanGroupCard}
+        onPress={openDetail}
+        activeOpacity={0.8}
+        disabled={!data.debtId}
+      >
+        <View style={styles.loanGroupHeader}>
+          <View style={[styles.loanGroupIcon, { backgroundColor: accentColor + '18' }]}>
+            <WalletIcon width={22} height={22} color={accentColor} />
+          </View>
+          <View style={styles.loanGroupHeaderInfo}>
+            <View style={styles.loanGroupTitleRow}>
+              <Text style={styles.loanGroupTitle} numberOfLines={1}>
+                {data.counterparty}
+              </Text>
+              <View
+                style={[
+                  styles.loanGroupDirectionBadge,
+                  {
+                    backgroundColor: isLent
+                      ? colors.success + '20'
+                      : '#FEE2E2',
+                  },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.loanGroupDirectionText,
+                    { color: isLent ? colors.success : '#B91C1C' },
+                  ]}
+                >
+                  {isLent ? 'Cho vay' : 'Đi vay'}
+                </Text>
+              </View>
+              {isSettled && (
+                <View style={styles.loanGroupSettledBadge}>
+                  <CheckIcon width={12} height={12} color={colors.success} />
+                  <Text style={styles.loanGroupSettledText}>Đã tất toán</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.loanGroupAmountRow}>
+              <Text style={styles.loanGroupAmountLabel}>Còn lại</Text>
+              <Text style={[styles.loanGroupRemain, { color: accentColor }]}>
+                {data.remaining.toLocaleString('vi-VN')}đ
+              </Text>
+              <Text style={styles.loanGroupAmountSep}>•</Text>
+              <Text style={styles.loanGroupAmountLabel}>Gốc</Text>
+              <Text style={styles.loanGroupPrincipal}>
+                {data.principal.toLocaleString('vi-VN')}đ
+              </Text>
+            </View>
+          </View>
+        </View>
+
+        {data.principal > 0 && (
+          <View style={styles.loanGroupProgressTrack}>
+            <View
+              style={[
+                styles.loanGroupProgressFill,
+                { width: `${pct}%`, backgroundColor: accentColor },
+              ]}
+            />
+          </View>
+        )}
+
+        {data.children.length > 0 && (
+          <View style={styles.loanGroupChildren}>
+            {data.children.map((child) => {
+              const label = childLabel(child.categoryId);
+              const isIncomeChild = child.type === 'income';
+              const sign = isIncomeChild ? '+' : '-';
+              const amountColor = isIncomeChild ? colors.success : colors.error;
+              const fundName =
+                child.fundId && fundNameById.has(child.fundId)
+                  ? (fundNameById.get(child.fundId) as string)
+                  : null;
+              return (
+                <View key={child.id} style={styles.loanGroupChildRow}>
+                  <View style={styles.loanGroupChildLeft}>
+                    <View
+                      style={[
+                        styles.loanGroupChildDot,
+                        { backgroundColor: amountColor },
+                      ]}
+                    />
+                    <View style={styles.loanGroupChildInfo}>
+                      <View style={styles.loanGroupChildTopRow}>
+                        <Text style={styles.loanGroupChildLabel}>{label}</Text>
+                        <Text style={styles.loanGroupChildDate}>
+                          {child.dateLabel} • {child.timeLabel}
+                        </Text>
+                      </View>
+                      {fundName && (
+                        <Text style={styles.loanGroupChildFund} numberOfLines={1}>
+                          Quỹ: {fundName}
+                        </Text>
+                      )}
+                      {child.note ? (
+                        <Text
+                          style={styles.loanGroupChildNote}
+                          numberOfLines={1}
+                        >
+                          {child.note}
+                        </Text>
+                      ) : null}
+                    </View>
+                  </View>
+                  <Text style={[styles.loanGroupChildAmount, { color: amountColor }]}>
+                    {sign}
+                    {child.amount.toLocaleString('vi-VN')}đ
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+      </TouchableOpacity>
+      </SwipeableRow>
+    );
+  };
+
   const renderTransactionItem = ({ item }: { item: TransactionViewItem }) => {
+    // Card gộp khoản vay/nợ.
+    if (item.isLoanGroup) {
+      return renderLoanGroupItem(item);
+    }
+    // Giao dịch vay/nợ đơn lẻ (khi không có debtId): render dạng cũ có badge.
+    if (item.isLoanMovement) {
+      return renderLoanTransactionItem(item);
+    }
+
     const category = getCategoryInfo(item.categoryId, item.type);
     if (!category) return null;
 
@@ -733,6 +1190,27 @@ const TransactionScreen: React.FC = () => {
             />
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* Tab chính: Thu chi / Vay nợ */}
+      <View style={styles.mainTabBar}>
+        {MAIN_TABS.map((tab) => {
+          const isActive = mainTab === tab.key;
+          return (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.mainTab, isActive && styles.mainTabActive]}
+              onPress={() => setMainTab(tab.key)}
+              activeOpacity={0.8}
+            >
+              <Text
+                style={[styles.mainTabText, isActive && styles.mainTabTextActive]}
+              >
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       {/* Modal chọn chế độ lọc ngày */}
@@ -1047,6 +1525,237 @@ const TransactionScreen: React.FC = () => {
         message={errorModalMessage}
         onClose={() => setErrorModalVisible(false)}
       />
+
+      {/* Modal xóa khoản nợ (trigger từ swipe trên loan group card) */}
+      <Modal
+        isVisible={!!deleteDebtTarget}
+        onBackdropPress={closeDeleteDebtModal}
+        onBackButtonPress={closeDeleteDebtModal}
+        style={styles.debtDeleteModal}
+        avoidKeyboard
+      >
+        <View style={styles.debtDeleteContent}>
+          {deleteDebtTarget && (() => {
+            const isLent = deleteDebtTarget.direction === 'lent';
+            const rem = debtRemaining(deleteDebtTarget);
+            const primaryFund = funds.find((f) => f.id === deleteDebtFundId);
+            const primaryBalance = primaryFund?.balance ?? 0;
+            const needsOffset = !isLent && rem > 0 && primaryBalance < rem;
+            const deficit = needsOffset ? rem - primaryBalance : 0;
+
+            return (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={styles.debtDeleteBody}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.debtDeleteTitle}>Xóa khoản nợ</Text>
+                <Text style={styles.debtDeleteSubtitle}>
+                  {deleteDebtTarget.counterparty} •{' '}
+                  {rem > 0 ? (
+                    <>
+                      Chưa thanh toán{' '}
+                      <Text style={styles.debtDeleteRefundAmount}>
+                        {rem.toLocaleString('vi-VN')}đ
+                      </Text>
+                    </>
+                  ) : (
+                    'Đã tất toán'
+                  )}
+                </Text>
+
+                {rem > 0 && (
+                  <>
+                    <Text style={styles.debtDeleteHint}>
+                      Các giao dịch đã trả/thu trước đó được giữ nguyên trong quỹ.
+                      Chỉ phần chưa thanh toán sẽ được{' '}
+                      {isLent ? 'cộng vào' : 'trừ khỏi'} quỹ bạn chọn.
+                    </Text>
+
+                    <Text style={styles.debtDeleteLabel}>
+                      {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
+                    </Text>
+                    <View style={styles.debtDeleteFundRow}>
+                      {fundsDefaultFirst.map((f) => {
+                        const isSelected = deleteDebtFundId === f.id;
+                        const c = f.color ?? colors.primary;
+                        return (
+                          <TouchableOpacity
+                            key={f.id}
+                            style={[
+                              styles.debtDeleteFundItem,
+                              isSelected && { borderColor: c },
+                            ]}
+                            onPress={() => {
+                              setDeleteDebtFundId(f.id);
+                              setDeleteDebtOffsetId('');
+                            }}
+                            activeOpacity={0.75}
+                          >
+                            <View
+                              style={[
+                                styles.debtDeleteFundIcon,
+                                { backgroundColor: c + '20' },
+                              ]}
+                            >
+                              {(() => {
+                                const FundIcon = getFundIconComponent(f.icon);
+                                return <FundIcon width={18} height={18} color={c} />;
+                              })()}
+                            </View>
+                            <View style={styles.debtDeleteFundTextCol}>
+                              <Text
+                                style={[
+                                  styles.debtDeleteFundText,
+                                  isSelected && { color: c },
+                                ]}
+                                numberOfLines={1}
+                              >
+                                {f.name}
+                              </Text>
+                              <Text style={styles.debtDeleteFundBalance}>
+                                {(f.balance ?? 0).toLocaleString('vi-VN')}đ
+                              </Text>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+
+                    {needsOffset && (
+                      <>
+                        <View style={styles.debtDeleteDeficit}>
+                          <Text style={styles.debtDeleteDeficitTitle}>
+                            "{primaryFund?.name ?? 'Quỹ'}" không đủ
+                          </Text>
+                          <Text style={styles.debtDeleteDeficitText}>
+                            Thiếu {deficit.toLocaleString('vi-VN')}đ. Chọn quỹ khác
+                            để cấn trừ phần còn thiếu.
+                          </Text>
+                        </View>
+                        <Text style={styles.debtDeleteLabel}>Cấn trừ từ</Text>
+                        {(() => {
+                          const candidates = fundsDefaultFirst.filter(
+                            (f) =>
+                              f.id !== deleteDebtFundId && (f.balance ?? 0) >= deficit,
+                          );
+                          if (!candidates.length) {
+                            return (
+                              <Text style={styles.debtDeleteNoCandidate}>
+                                Không có quỹ nào đủ số dư để cấn trừ.
+                              </Text>
+                            );
+                          }
+                          return (
+                            <View style={styles.debtDeleteFundRow}>
+                              {candidates.map((f) => {
+                                const isSelected = deleteDebtOffsetId === f.id;
+                                const c = f.color ?? colors.primary;
+                                return (
+                                  <TouchableOpacity
+                                    key={f.id}
+                                    style={[
+                                      styles.debtDeleteFundItem,
+                                      isSelected && { borderColor: c },
+                                    ]}
+                                    onPress={() => setDeleteDebtOffsetId(f.id)}
+                                    activeOpacity={0.75}
+                                  >
+                                    <View
+                                      style={[
+                                        styles.debtDeleteFundIcon,
+                                        { backgroundColor: c + '20' },
+                                      ]}
+                                    >
+                                      {(() => {
+                                        const FundIcon = getFundIconComponent(f.icon);
+                                        return <FundIcon width={18} height={18} color={c} />;
+                                      })()}
+                                    </View>
+                                    <View style={styles.debtDeleteFundTextCol}>
+                                      <Text
+                                        style={[
+                                          styles.debtDeleteFundText,
+                                          isSelected && { color: c },
+                                        ]}
+                                        numberOfLines={1}
+                                      >
+                                        {f.name}
+                                      </Text>
+                                      <Text style={styles.debtDeleteFundBalance}>
+                                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
+                                      </Text>
+                                    </View>
+                                  </TouchableOpacity>
+                                );
+                              })}
+                            </View>
+                          );
+                        })()}
+                      </>
+                    )}
+                  </>
+                )}
+
+                {rem === 0 && (
+                  <Text style={styles.debtDeleteHint}>
+                    Xóa khoản nợ này khỏi danh sách. Các giao dịch liên kết cũng bị xóa.
+                  </Text>
+                )}
+              </ScrollView>
+            );
+          })()}
+
+          <View style={styles.debtDeleteButtons}>
+            <TouchableOpacity
+              style={styles.debtDeleteCancel}
+              onPress={closeDeleteDebtModal}
+              disabled={isDeletingDebt}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.debtDeleteCancelText}>Hủy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.debtDeleteConfirm,
+                (() => {
+                  if (!deleteDebtTarget) return { opacity: 0.5 };
+                  const isLent = deleteDebtTarget.direction === 'lent';
+                  const rem = debtRemaining(deleteDebtTarget);
+                  if (rem > 0 && !deleteDebtFundId) return { opacity: 0.5 };
+                  if (rem > 0 && !isLent) {
+                    const primary = funds.find((f) => f.id === deleteDebtFundId);
+                    const needsOff = (primary?.balance ?? 0) < rem;
+                    if (needsOff && !deleteDebtOffsetId) return { opacity: 0.5 };
+                  }
+                  return null;
+                })(),
+              ]}
+              onPress={handleConfirmDeleteDebt}
+              disabled={(() => {
+                if (isDeletingDebt) return true;
+                if (!deleteDebtTarget) return true;
+                const isLent = deleteDebtTarget.direction === 'lent';
+                const rem = debtRemaining(deleteDebtTarget);
+                if (rem > 0 && !deleteDebtFundId) return true;
+                if (rem > 0 && !isLent) {
+                  const primary = funds.find((f) => f.id === deleteDebtFundId);
+                  const needsOff = (primary?.balance ?? 0) < rem;
+                  if (needsOff && !deleteDebtOffsetId) return true;
+                }
+                return false;
+              })()}
+              activeOpacity={0.85}
+            >
+              {isDeletingDebt ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.debtDeleteConfirmText}>Xóa</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* Modal bù tiền để xóa khoản thu khi quỹ không đủ */}
       <Modal
@@ -1503,7 +2212,7 @@ const TransactionScreen: React.FC = () => {
         <View onLayout={onFilterPanelLayout}>
         <TransactionFilterPanel
           timeFilters={TIME_FILTERS}
-          typeFilters={TYPE_FILTERS}
+          typeFilters={mainTab === 'debts' ? [] : TYPE_FILTERS}
           activeFilter={activeFilter}
           typeFilter={typeFilter}
           dateFilterMode={dateFilterMode}
@@ -1519,6 +2228,9 @@ const TransactionScreen: React.FC = () => {
           onFromDateChange={handleFromDateChange}
           onToDateChange={handleToDateChange}
           onResetFilters={handleResetFilters}
+          loanToggleVisible={mainTab === 'transactions'}
+          showLoan={showLoanInList}
+          onShowLoanChange={setShowLoanInListPersisted}
         />
         </View>
         </Animated.View>
@@ -1533,7 +2245,7 @@ const TransactionScreen: React.FC = () => {
           <View style={[styles.floatingFilterCard, { marginTop: insets.top + 58 }]}>
             <TransactionFilterPanel
               timeFilters={TIME_FILTERS}
-              typeFilters={TYPE_FILTERS}
+              typeFilters={mainTab === 'debts' ? [] : TYPE_FILTERS}
               activeFilter={activeFilter}
               typeFilter={typeFilter}
               dateFilterMode={dateFilterMode}
@@ -1549,56 +2261,88 @@ const TransactionScreen: React.FC = () => {
               onFromDateChange={handleFromDateChange}
               onToDateChange={handleToDateChange}
               onResetFilters={handleResetFilters}
+              loanToggleVisible={mainTab === 'transactions'}
+              showLoan={showLoanInList}
+              onShowLoanChange={setShowLoanInListPersisted}
             />
           </View>
         </View>
       )}
 
       <Animated.View style={[styles.belowFilterSection, belowFilterScrollLiftStyle]}>
+        {/* Chip filter hướng vay (chỉ tab Vay nợ) */}
+        {mainTab === 'debts' && (
+          <View style={styles.loanDirectionRow}>
+            {([
+              { key: 'all', label: 'Tất cả' },
+              { key: 'lent', label: 'Cho vay' },
+              { key: 'borrowed', label: 'Đi vay' },
+            ] as { key: LoanDirectionFilter; label: string }[]).map((opt) => {
+              const isActive = loanDirectionFilter === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.key}
+                  style={[
+                    styles.loanDirectionChip,
+                    isActive && styles.loanDirectionChipActive,
+                  ]}
+                  onPress={() => setLoanDirectionFilter(opt.key)}
+                  activeOpacity={0.7}
+                >
+                  <Text
+                    style={[
+                      styles.loanDirectionChipText,
+                      isActive && styles.loanDirectionChipTextActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
         {/* Summary Card */}
         <View style={styles.summaryRow}>
           <View style={styles.summaryCard}>
-            {(typeFilter === 'all' || typeFilter === 'expense') && (
-              <View style={[styles.summaryItem, styles.summaryItemExpense]}>
-                <View style={styles.summaryTitleRow}>
-                  <View
-                    style={[styles.summaryIconCircle, { borderColor: colors.error }]}
-                  >
-                    <Text
-                      style={[styles.summaryIconText, { color: colors.error }]}
-                    >
-                      -
-                    </Text>
-                  </View>
-                  <Text style={styles.summaryLabel}>Khoản chi</Text>
+            <View style={[styles.summaryItem, styles.summaryItemExpense]}>
+              <View style={styles.summaryTitleRow}>
+                <View
+                  style={[styles.summaryIconCircle, { borderColor: colors.error }]}
+                >
+                  <Text style={[styles.summaryIconText, { color: colors.error }]}>
+                    -
+                  </Text>
                 </View>
-                <Text style={[styles.summaryAmount, { color: colors.error }]}>
-                  {totalExpense.toLocaleString('vi-VN')}đ
+                <Text style={styles.summaryLabel}>
+                  {mainTab === 'debts' ? 'Cho vay / Trả nợ' : 'Khoản chi'}
                 </Text>
               </View>
-            )}
+              <Text style={[styles.summaryAmount, { color: colors.error }]}>
+                {totalExpense.toLocaleString('vi-VN')}đ
+              </Text>
+            </View>
 
-            {typeFilter === 'all' && <View style={styles.summaryDivider} />}
+            <View style={styles.summaryDivider} />
 
-            {(typeFilter === 'all' || typeFilter === 'income') && (
-              <View style={[styles.summaryItem, styles.summaryItemIncome]}>
-                <View style={styles.summaryTitleRow}>
-                  <View
-                    style={[styles.summaryIconCircle, { borderColor: colors.success }]}
-                  >
-                    <Text
-                      style={[styles.summaryIconText, { color: colors.success }]}
-                    >
-                      +
-                    </Text>
-                  </View>
-                  <Text style={styles.summaryLabel}>Khoản thu</Text>
+            <View style={[styles.summaryItem, styles.summaryItemIncome]}>
+              <View style={styles.summaryTitleRow}>
+                <View
+                  style={[styles.summaryIconCircle, { borderColor: colors.success }]}
+                >
+                  <Text style={[styles.summaryIconText, { color: colors.success }]}>
+                    +
+                  </Text>
                 </View>
-                <Text style={[styles.summaryAmount, { color: colors.success }]}>
-                  {totalIncome.toLocaleString('vi-VN')}đ
+                <Text style={styles.summaryLabel}>
+                  {mainTab === 'debts' ? 'Đi vay / Thu nợ' : 'Khoản thu'}
                 </Text>
               </View>
-            )}
+              <Text style={[styles.summaryAmount, { color: colors.success }]}>
+                {totalIncome.toLocaleString('vi-VN')}đ
+              </Text>
+            </View>
             <View style={styles.netInlineDivider} />
             <View style={styles.netInlineRow}>
               <Text style={styles.netLabel}>NET</Text>
@@ -1755,6 +2499,65 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 12,
     gap: 8,
+  },
+  mainTabBar: {
+    flexDirection: 'row',
+    marginHorizontal: 20,
+    marginTop: 8,
+    marginBottom: 4,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    padding: 4,
+    gap: 4,
+  },
+  mainTab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  mainTabActive: {
+    backgroundColor: colors.white,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  mainTabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  mainTabTextActive: {
+    color: colors.text,
+    fontWeight: '800',
+  },
+  loanDirectionRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    gap: 8,
+  },
+  loanDirectionChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.white,
+  },
+  loanDirectionChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  loanDirectionChipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  loanDirectionChipTextActive: {
+    color: colors.white,
   },
   filterTab: {
     flex: 1,
@@ -2274,6 +3077,315 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.text,
     // marginBottom: 1,
+  },
+  loanTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  loanBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  loanBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  loanGroupCard: {
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  loanGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  loanGroupIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loanGroupHeaderInfo: {
+    flex: 1,
+    gap: 4,
+  },
+  loanGroupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  loanGroupTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: colors.text,
+    flexShrink: 1,
+  },
+  loanGroupDirectionBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  loanGroupDirectionText: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  loanGroupSettledBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+    backgroundColor: colors.success + '20',
+    marginLeft: 'auto',
+  },
+  loanGroupSettledText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.success,
+  },
+  loanGroupAmountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 4,
+  },
+  loanGroupAmountLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  loanGroupAmountSep: {
+    fontSize: 12,
+    color: colors.textLight,
+    marginHorizontal: 2,
+  },
+  loanGroupRemain: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  loanGroupPrincipal: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  loanGroupProgressTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.backgroundSecondary,
+    overflow: 'hidden',
+    marginTop: 10,
+  },
+  loanGroupProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  loanGroupChildren: {
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: colors.backgroundSecondary,
+    gap: 8,
+  },
+  loanGroupChildRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  loanGroupChildLeft: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    flex: 1,
+    gap: 8,
+  },
+  loanGroupChildDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    marginTop: 7,
+  },
+  loanGroupChildInfo: {
+    flex: 1,
+    gap: 2,
+  },
+  loanGroupChildTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  loanGroupChildLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  loanGroupChildDate: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  loanGroupChildFund: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  loanGroupChildNote: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+  },
+  loanGroupChildAmount: {
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  // Delete debt modal styles
+  debtDeleteModal: {
+    justifyContent: 'center',
+    margin: 20,
+  },
+  debtDeleteContent: {
+    backgroundColor: colors.background,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 16,
+    maxHeight: '85%',
+  },
+  debtDeleteBody: {
+    paddingBottom: 10,
+    gap: 10,
+  },
+  debtDeleteTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: colors.text,
+  },
+  debtDeleteSubtitle: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  debtDeleteRefundAmount: {
+    fontWeight: '900',
+    color: colors.text,
+  },
+  debtDeleteHint: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    lineHeight: 17,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  debtDeleteLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+    marginTop: 4,
+  },
+  debtDeleteFundRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    paddingVertical: 4,
+  },
+  debtDeleteFundItem: {
+    width: '48%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    backgroundColor: colors.white,
+  },
+  debtDeleteFundIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  debtDeleteFundTextCol: {
+    flex: 1,
+    flexDirection: 'column',
+    justifyContent: 'center',
+  },
+  debtDeleteFundText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  debtDeleteFundBalance: {
+    marginTop: 2,
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  debtDeleteDeficit: {
+    marginTop: 4,
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: colors.error + '12',
+  },
+  debtDeleteDeficitTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: colors.error,
+  },
+  debtDeleteDeficitText: {
+    marginTop: 2,
+    fontSize: 12,
+    color: colors.error,
+  },
+  debtDeleteNoCandidate: {
+    padding: 10,
+    borderRadius: 10,
+    backgroundColor: colors.backgroundSecondary,
+    fontSize: 13,
+    color: colors.textSecondary,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+  debtDeleteButtons: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+  },
+  debtDeleteCancel: {
+    flex: 1,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  debtDeleteCancelText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.textSecondary,
+  },
+  debtDeleteConfirm: {
+    flex: 1.4,
+    backgroundColor: colors.error,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  debtDeleteConfirmText: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: colors.white,
   },
   transactionNote: {
     fontSize: 13,

@@ -497,10 +497,7 @@ const IncomeSourcesScreen: React.FC = () => {
               </TouchableOpacity>
             </View>
 
-            <View style={styles.categorySectionHeader}>
-              <Text style={styles.inputLabel}>Danh mục thu nhập</Text>
-              <Text style={styles.categoryOptional}>(không bắt buộc)</Text>
-            </View>
+            <Text style={styles.inputLabel}>Danh mục thu nhập</Text>
             <CategoryPicker
               categories={INCOME_CATEGORIES}
               value={draftCategoryId}
@@ -635,19 +632,6 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   modalSectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  categorySectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    marginTop: 12,
-    marginBottom: 8,
-  },
-  categoryOptional: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: colors.textLight,
-    fontStyle: 'italic',
-  },
   percentTotal: { fontSize: 13, fontWeight: '900' },
   percentOk: { color: colors.success },
   percentBad: { color: colors.error },
