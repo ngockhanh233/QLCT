@@ -18,10 +18,11 @@ import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import WalletIcon from '../../../../assets/icons/WalletIcon';
 import CheckIcon from '../../../../assets/icons/CheckIcon';
 import { showSnackbar } from '../../../../utils/snackbar';
-import { CurrencyInput, DatePicker, SwipeableRow } from '../../../../components';
+import { CurrencyInput, DatePicker, SwipeableRow, FundPicker } from '../../../../components';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
-import { debtRemaining } from '../../../../services/debts';
+import { debtRemaining, type DebtRepayment } from '../../../../services/debts';
+import EditNoteDateModal from './components/EditNoteDateModal';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 import type { RootStackParamList } from '../../MainScreen';
 
@@ -32,7 +33,13 @@ const DebtDetailScreen: React.FC = () => {
   const debtId = route.params?.debtId;
 
   const { funds, defaultFund } = useFunds();
-  const { debts, addRepayment, deleteDebt, deleteRepayment } = useDebts();
+  const {
+    debts,
+    addRepayment,
+    deleteDebt,
+    deleteRepayment,
+    updateRepaymentNoteAndDate,
+  } = useDebts();
 
   const debt = useMemo(() => debts.find((d) => d.id === debtId), [debts, debtId]);
 
@@ -51,6 +58,9 @@ const DebtDetailScreen: React.FC = () => {
   const [repayDate, setRepayDate] = useState<Date>(new Date());
   const [repayNote, setRepayNote] = useState('');
   const [isRepaying, setIsRepaying] = useState(false);
+
+  // Edit repayment modal state
+  const [editRepayTarget, setEditRepayTarget] = useState<DebtRepayment | null>(null);
 
   // Delete repayment modal state
   const [deleteRepayVisible, setDeleteRepayVisible] = useState(false);
@@ -335,7 +345,7 @@ const DebtDetailScreen: React.FC = () => {
               </View>
             )}
             <Text style={styles.metaText}>
-              Bắt đầu: {debt.startDate.toLocaleDateString('vi-VN')}
+              Ngày: {debt.startDate.toLocaleDateString('vi-VN')}
             </Text>
             {debt.dueDate && (
               <Text style={styles.metaTextDue}>
@@ -372,6 +382,7 @@ const DebtDetailScreen: React.FC = () => {
                 return (
                   <View key={r.id} style={styles.historyItemWrapper}>
                     <SwipeableRow
+                      onEdit={() => setEditRepayTarget(r)}
                       onDelete={() => openDeleteRepay(r.id, r.amount, r.fundId)}
                       deleteText="Xóa"
                       borderRadius={14}
@@ -472,45 +483,13 @@ const DebtDetailScreen: React.FC = () => {
             <Text style={styles.inputLabel}>
               {isLent ? 'Quỹ nhận tiền' : 'Quỹ trừ tiền'}
             </Text>
-            <View style={styles.fundPickerRow}>
-              {fundsDefaultFirst.map((f) => {
-                const isSelected = repayFundId === f.id;
-                const c = f.color ?? colors.primary;
-                const insufficient = !isLent && (f.balance ?? 0) < repayAmount;
-                return (
-                  <TouchableOpacity
-                    key={f.id}
-                    style={[
-                      styles.fundPickItem,
-                      isSelected && { borderColor: c },
-                      insufficient && { opacity: 0.45 },
-                    ]}
-                    onPress={() => setRepayFundId(f.id)}
-                    disabled={insufficient}
-                    activeOpacity={0.75}
-                  >
-                    <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                      {(() => {
-                        const FundIcon = getFundIconComponent(f.icon);
-                        return <FundIcon width={18} height={18} color={c} />;
-                      })()}
-                    </View>
-                    <View style={styles.fundPickTextCol}>
-                      <Text
-                        style={[styles.fundPickText, isSelected && { color: c }]}
-                        numberOfLines={1}
-                      >
-                        {f.name}
-                      </Text>
-                      <Text style={styles.fundPickBalance}>
-                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                      </Text>
-                      {insufficient && <Text style={styles.fundPickInsuff}>Không đủ</Text>}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <FundPicker
+              funds={fundsDefaultFirst}
+              selectedFundId={repayFundId}
+              onSelect={setRepayFundId}
+              isDisabled={(f) => !isLent && (f.balance ?? 0) < repayAmount}
+              disabledReason={() => 'Không đủ'}
+            />
 
             <Text style={styles.inputLabel}>Ngày</Text>
             <DatePicker value={repayDate} onChange={setRepayDate} />
@@ -584,44 +563,14 @@ const DebtDetailScreen: React.FC = () => {
                 <Text style={styles.inputLabel}>
                   {isLent ? 'Quỹ trừ tiền' : 'Quỹ nhận lại'}
                 </Text>
-                <View style={styles.fundPickerRow}>
-                  {fundsDefaultFirst.map((f) => {
-                    const isSelected = deleteRepayFundId === f.id;
-                    const c = f.color ?? colors.primary;
-                    return (
-                      <TouchableOpacity
-                        key={f.id}
-                        style={[
-                          styles.fundPickItem,
-                          isSelected && { borderColor: c },
-                        ]}
-                        onPress={() => {
-                          setDeleteRepayFundId(f.id);
-                          setDeleteRepayOffsetId('');
-                        }}
-                        activeOpacity={0.75}
-                      >
-                        <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                          {(() => {
-                            const FundIcon = getFundIconComponent(f.icon);
-                            return <FundIcon width={18} height={18} color={c} />;
-                          })()}
-                        </View>
-                        <View style={styles.fundPickTextCol}>
-                          <Text
-                            style={[styles.fundPickText, isSelected && { color: c }]}
-                            numberOfLines={1}
-                          >
-                            {f.name}
-                          </Text>
-                          <Text style={styles.fundPickBalance}>
-                            {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                          </Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
+                <FundPicker
+                  funds={fundsDefaultFirst}
+                  selectedFundId={deleteRepayFundId}
+                  onSelect={(id) => {
+                    setDeleteRepayFundId(id);
+                    setDeleteRepayOffsetId('');
+                  }}
+                />
 
                 {needsOffset && (
                   <>
@@ -636,57 +585,16 @@ const DebtDetailScreen: React.FC = () => {
                     </View>
 
                     <Text style={styles.inputLabel}>Cấn trừ từ</Text>
-                    {(() => {
-                      const candidates = fundsDefaultFirst.filter(
-                        (f) => f.id !== deleteRepayFundId && (f.balance ?? 0) >= deficit,
-                      );
-                      if (!candidates.length) {
-                        return (
-                          <Text style={styles.deficitNoCandidate}>
-                            Không có quỹ nào đủ số dư để cấn trừ.
-                          </Text>
-                        );
-                      }
-                      return (
-                        <View style={styles.fundPickerRow}>
-                          {candidates.map((f) => {
-                            const isSelected = deleteRepayOffsetId === f.id;
-                            const c = f.color ?? colors.primary;
-                            return (
-                              <TouchableOpacity
-                                key={f.id}
-                                style={[
-                                  styles.fundPickItem,
-                                  isSelected && { borderColor: c },
-                                ]}
-                                onPress={() => setDeleteRepayOffsetId(f.id)}
-                                activeOpacity={0.75}
-                              >
-                                <View
-                                  style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}
-                                >
-                                  {(() => {
-                                    const FundIcon = getFundIconComponent(f.icon);
-                                    return <FundIcon width={18} height={18} color={c} />;
-                                  })()}
-                                </View>
-                                <View style={styles.fundPickTextCol}>
-                                  <Text
-                                    style={[styles.fundPickText, isSelected && { color: c }]}
-                                    numberOfLines={1}
-                                  >
-                                    {f.name}
-                                  </Text>
-                                  <Text style={styles.fundPickBalance}>
-                                    {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                                  </Text>
-                                </View>
-                              </TouchableOpacity>
-                            );
-                          })}
-                        </View>
-                      );
-                    })()}
+                    <FundPicker
+                      funds={fundsDefaultFirst.filter(
+                        (f) =>
+                          f.id !== deleteRepayFundId &&
+                          (f.balance ?? 0) >= deficit,
+                      )}
+                      selectedFundId={deleteRepayOffsetId}
+                      onSelect={setDeleteRepayOffsetId}
+                      emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                    />
                   </>
                 )}
               </ScrollView>
@@ -790,44 +698,14 @@ const DebtDetailScreen: React.FC = () => {
                     <Text style={styles.inputLabel}>
                       {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
                     </Text>
-                    <View style={styles.fundPickerRow}>
-                      {fundsDefaultFirst.map((f) => {
-                        const isSelected = deleteDebtFundId === f.id;
-                        const c = f.color ?? colors.primary;
-                        return (
-                          <TouchableOpacity
-                            key={f.id}
-                            style={[
-                              styles.fundPickItem,
-                              isSelected && { borderColor: c },
-                            ]}
-                            onPress={() => {
-                              setDeleteDebtFundId(f.id);
-                              setDeleteDebtOffsetId('');
-                            }}
-                            activeOpacity={0.75}
-                          >
-                            <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                              {(() => {
-                                const FundIcon = getFundIconComponent(f.icon);
-                                return <FundIcon width={18} height={18} color={c} />;
-                              })()}
-                            </View>
-                            <View style={styles.fundPickTextCol}>
-                              <Text
-                                style={[styles.fundPickText, isSelected && { color: c }]}
-                                numberOfLines={1}
-                              >
-                                {f.name}
-                              </Text>
-                              <Text style={styles.fundPickBalance}>
-                                {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
+                    <FundPicker
+                      funds={fundsDefaultFirst}
+                      selectedFundId={deleteDebtFundId}
+                      onSelect={(id) => {
+                        setDeleteDebtFundId(id);
+                        setDeleteDebtOffsetId('');
+                      }}
+                    />
 
                     {needsOffset && (
                       <>
@@ -841,57 +719,16 @@ const DebtDetailScreen: React.FC = () => {
                           </Text>
                         </View>
                         <Text style={styles.inputLabel}>Cấn trừ từ</Text>
-                        {(() => {
-                          const candidates = fundsDefaultFirst.filter(
-                            (f) => f.id !== deleteDebtFundId && (f.balance ?? 0) >= deficit,
-                          );
-                          if (!candidates.length) {
-                            return (
-                              <Text style={styles.deficitNoCandidate}>
-                                Không có quỹ nào đủ số dư để cấn trừ.
-                              </Text>
-                            );
-                          }
-                          return (
-                            <View style={styles.fundPickerRow}>
-                              {candidates.map((f) => {
-                                const isSelected = deleteDebtOffsetId === f.id;
-                                const c = f.color ?? colors.primary;
-                                return (
-                                  <TouchableOpacity
-                                    key={f.id}
-                                    style={[
-                                      styles.fundPickItem,
-                                      isSelected && { borderColor: c },
-                                    ]}
-                                    onPress={() => setDeleteDebtOffsetId(f.id)}
-                                    activeOpacity={0.75}
-                                  >
-                                    <View
-                                      style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}
-                                    >
-                                      {(() => {
-                                        const FundIcon = getFundIconComponent(f.icon);
-                                        return <FundIcon width={18} height={18} color={c} />;
-                                      })()}
-                                    </View>
-                                    <View style={styles.fundPickTextCol}>
-                                      <Text
-                                        style={[styles.fundPickText, isSelected && { color: c }]}
-                                        numberOfLines={1}
-                                      >
-                                        {f.name}
-                                      </Text>
-                                      <Text style={styles.fundPickBalance}>
-                                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                                      </Text>
-                                    </View>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          );
-                        })()}
+                        <FundPicker
+                          funds={fundsDefaultFirst.filter(
+                            (f) =>
+                              f.id !== deleteDebtFundId &&
+                              (f.balance ?? 0) >= deficit,
+                          )}
+                          selectedFundId={deleteDebtOffsetId}
+                          onSelect={setDeleteDebtOffsetId}
+                          emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                        />
                       </>
                     )}
                   </>
@@ -956,6 +793,39 @@ const DebtDetailScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      <EditNoteDateModal
+        visible={!!editRepayTarget}
+        onClose={() => setEditRepayTarget(null)}
+        title={
+          debt?.direction === 'lent'
+            ? 'Chỉnh sửa khoản thu'
+            : 'Chỉnh sửa khoản trả'
+        }
+        subtitle={
+          editRepayTarget
+            ? `${editRepayTarget.amount.toLocaleString('vi-VN')}đ${
+                editRepayTarget.fundId
+                  ? ` • ${
+                      funds.find((f) => f.id === editRepayTarget.fundId)?.name ??
+                      'Quỹ đã bị xóa'
+                    }`
+                  : ''
+              }`
+            : undefined
+        }
+        hint="Chỉ có thể sửa ghi chú và ngày giờ. Số tiền và quỹ sẽ giữ nguyên."
+        initialNote={editRepayTarget?.note ?? ''}
+        initialDate={editRepayTarget?.date ?? new Date()}
+        onSave={async (note, date) => {
+          if (!debtId || !editRepayTarget) return;
+          await updateRepaymentNoteAndDate(debtId, editRepayTarget.id, {
+            note,
+            date,
+          });
+        }}
+        successMessage="Đã cập nhật giao dịch"
+      />
     </View>
   );
 };

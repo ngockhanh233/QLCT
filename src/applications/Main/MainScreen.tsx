@@ -31,6 +31,8 @@ export type RootStackParamList = {
           note?: string;
           transactionDate: string;
           fundId?: string;
+          isSplitIncome?: boolean;
+          incomeSplits?: Array<{ fundId: string; amount: number }> | null;
         };
       };
   FinanceReport: undefined;

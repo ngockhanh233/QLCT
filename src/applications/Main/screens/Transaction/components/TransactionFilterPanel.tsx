@@ -189,12 +189,12 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   loanToggleWrap: {
-    flexDirection: 'row',
+    flexDirection: 'column',
     alignItems: 'center',
-    gap: 6,
+    gap: 2,
   },
   loanToggleLabel: {
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '700',
     color: colors.textSecondary,
   },

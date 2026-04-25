@@ -20,7 +20,8 @@ import WalletIcon from '../../../../assets/icons/WalletIcon';
 import CheckIcon from '../../../../assets/icons/CheckIcon';
 import ClockIcon from '../../../../assets/icons/ClockIcon';
 import { showSnackbar } from '../../../../utils/snackbar';
-import { CurrencyInput, SwipeableRow, DatePicker } from '../../../../components';
+import { CurrencyInput, SwipeableRow, DatePicker, FundPicker } from '../../../../components';
+import EditNoteDateModal from './components/EditNoteDateModal';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
 import {
@@ -45,6 +46,7 @@ const DebtsScreen: React.FC = () => {
     addRepayment,
     deleteDebt,
     reload: reloadDebts,
+    updateDebtNoteAndDate,
   } = useDebts();
   const [isRefreshing, setIsRefreshing] = useState(false);
 
@@ -90,6 +92,9 @@ const DebtsScreen: React.FC = () => {
   const [deleteDebtFundId, setDeleteDebtFundId] = useState<string>('');
   const [deleteDebtOffsetId, setDeleteDebtOffsetId] = useState<string>('');
   const [isDeletingDebt, setIsDeletingDebt] = useState(false);
+
+  // Edit debt modal
+  const [editDebtTarget, setEditDebtTarget] = useState<DebtRecord | null>(null);
 
   const fundsDefaultFirst = useMemo(() => {
     return [...funds].sort((a, b) => {
@@ -276,6 +281,7 @@ const DebtsScreen: React.FC = () => {
     return (
       <View key={debt.id} style={styles.cardWrapper}>
         <SwipeableRow
+          onEdit={() => setEditDebtTarget(debt)}
           onSecondary={!isSettled ? () => openRepay(debt) : undefined}
           secondaryText={isLent ? 'Thu' : 'Trả'}
           secondaryButtonColor={accentColor}
@@ -458,20 +464,30 @@ const DebtsScreen: React.FC = () => {
 
       <View style={styles.tabBar}>
         <TouchableOpacity
-          style={[styles.tabItem, tab === 'lent' && styles.tabItemActive]}
+          style={[
+            styles.tabItem,
+            tab === 'lent' && styles.tabItemActiveLent,
+          ]}
           onPress={() => setTab('lent')}
           activeOpacity={0.8}
         >
-          <Text style={[styles.tabText, tab === 'lent' && styles.tabTextActive]}>
+          <Text
+            style={[styles.tabText, tab === 'lent' && styles.tabTextActive]}
+          >
             Phải thu
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.tabItem, tab === 'borrowed' && styles.tabItemActive]}
+          style={[
+            styles.tabItem,
+            tab === 'borrowed' && styles.tabItemActiveBorrowed,
+          ]}
           onPress={() => setTab('borrowed')}
           activeOpacity={0.8}
         >
-          <Text style={[styles.tabText, tab === 'borrowed' && styles.tabTextActive]}>
+          <Text
+            style={[styles.tabText, tab === 'borrowed' && styles.tabTextActive]}
+          >
             Phải trả
           </Text>
         </TouchableOpacity>
@@ -557,7 +573,7 @@ const DebtsScreen: React.FC = () => {
               <TouchableOpacity
                 style={[
                   styles.directionItem,
-                  formDirection === 'lent' && styles.directionItemActive,
+                  formDirection === 'lent' && styles.directionItemActiveLent,
                 ]}
                 onPress={() => setFormDirection('lent')}
                 activeOpacity={0.8}
@@ -565,7 +581,7 @@ const DebtsScreen: React.FC = () => {
                 <Text
                   style={[
                     styles.directionText,
-                    formDirection === 'lent' && { color: colors.success },
+                    formDirection === 'lent' && styles.directionTextActive,
                   ]}
                 >
                   Cho vay
@@ -574,7 +590,7 @@ const DebtsScreen: React.FC = () => {
               <TouchableOpacity
                 style={[
                   styles.directionItem,
-                  formDirection === 'borrowed' && styles.directionItemActive,
+                  formDirection === 'borrowed' && styles.directionItemActiveBorrowed,
                 ]}
                 onPress={() => setFormDirection('borrowed')}
                 activeOpacity={0.8}
@@ -582,7 +598,7 @@ const DebtsScreen: React.FC = () => {
                 <Text
                   style={[
                     styles.directionText,
-                    formDirection === 'borrowed' && { color: colors.error },
+                    formDirection === 'borrowed' && styles.directionTextActive,
                   ]}
                 >
                   Đi vay
@@ -597,7 +613,7 @@ const DebtsScreen: React.FC = () => {
               style={styles.textInput}
               value={formCounterparty}
               onChangeText={setFormCounterparty}
-              placeholder="VD: Anh Tuấn"
+              placeholder="VD: Anh iu Khánh"
               placeholderTextColor={colors.textLight}
             />
 
@@ -614,48 +630,17 @@ const DebtsScreen: React.FC = () => {
             <Text style={styles.inputLabel}>
               {formDirection === 'lent' ? 'Quỹ trừ tiền' : 'Quỹ nhận tiền'}
             </Text>
-            <View style={styles.fundPickerRow}>
-              {fundsDefaultFirst.map((f) => {
-                const isSelected = formFundId === f.id;
-                const c = f.color ?? colors.primary;
-                const insufficient =
-                  formDirection === 'lent' && (f.balance ?? 0) < formPrincipal;
-                return (
-                  <TouchableOpacity
-                    key={f.id}
-                    style={[
-                      styles.fundPickItem,
-                      isSelected && { borderColor: c },
-                      insufficient && { opacity: 0.45 },
-                    ]}
-                    onPress={() => setFormFundId(f.id)}
-                    disabled={insufficient}
-                    activeOpacity={0.75}
-                  >
-                    <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                      {(() => {
-                        const FundIcon = getFundIconComponent(f.icon);
-                        return <FundIcon width={18} height={18} color={c} />;
-                      })()}
-                    </View>
-                    <View style={styles.fundPickTextCol}>
-                      <Text
-                        style={[styles.fundPickText, isSelected && { color: c }]}
-                        numberOfLines={1}
-                      >
-                        {f.name}
-                      </Text>
-                      <Text style={styles.fundPickBalance}>
-                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                      </Text>
-                      {insufficient && <Text style={styles.fundPickInsuff}>Không đủ</Text>}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+            <FundPicker
+              funds={fundsDefaultFirst}
+              selectedFundId={formFundId}
+              onSelect={setFormFundId}
+              isDisabled={(f) =>
+                formDirection === 'lent' && (f.balance ?? 0) < formPrincipal
+              }
+              disabledReason={() => 'Không đủ'}
+            />
 
-            <Text style={styles.inputLabel}>Ngày bắt đầu</Text>
+            <Text style={styles.inputLabel}>Ngày ghi nhận</Text>
             <DatePicker value={formStartDate} onChange={setFormStartDate} />
 
             <View style={styles.dueRow}>
@@ -683,7 +668,7 @@ const DebtsScreen: React.FC = () => {
               style={[styles.textInput, styles.textInputMulti]}
               value={formNote}
               onChangeText={setFormNote}
-              placeholder="..."
+              placeholder="Nhập ghi chú"
               placeholderTextColor={colors.textLight}
               multiline
             />
@@ -751,47 +736,16 @@ const DebtsScreen: React.FC = () => {
               <Text style={styles.inputLabel}>
                 {repayDebt.direction === 'lent' ? 'Quỹ nhận tiền' : 'Quỹ trừ tiền'}
               </Text>
-              <View style={styles.fundPickerRow}>
-                {fundsDefaultFirst.map((f) => {
-                  const isSelected = repayFundId === f.id;
-                  const c = f.color ?? colors.primary;
-                  const insufficient =
-                    repayDebt.direction === 'borrowed' &&
-                    (f.balance ?? 0) < repayAmount;
-                  return (
-                    <TouchableOpacity
-                      key={f.id}
-                      style={[
-                        styles.fundPickItem,
-                        isSelected && { borderColor: c },
-                        insufficient && { opacity: 0.45 },
-                      ]}
-                      onPress={() => setRepayFundId(f.id)}
-                      disabled={insufficient}
-                      activeOpacity={0.75}
-                    >
-                      <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                        {(() => {
-                          const FundIcon = getFundIconComponent(f.icon);
-                          return <FundIcon width={18} height={18} color={c} />;
-                        })()}
-                      </View>
-                      <View style={styles.fundPickTextCol}>
-                        <Text
-                          style={[styles.fundPickText, isSelected && { color: c }]}
-                          numberOfLines={1}
-                        >
-                          {f.name}
-                        </Text>
-                        <Text style={styles.fundPickBalance}>
-                          {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                        </Text>
-                        {insufficient && <Text style={styles.fundPickInsuff}>Không đủ</Text>}
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
+              <FundPicker
+                funds={fundsDefaultFirst}
+                selectedFundId={repayFundId}
+                onSelect={setRepayFundId}
+                isDisabled={(f) =>
+                  repayDebt.direction === 'borrowed' &&
+                  (f.balance ?? 0) < repayAmount
+                }
+                disabledReason={() => 'Không đủ'}
+              />
 
               <Text style={styles.inputLabel}>Ngày</Text>
               <DatePicker value={repayDate} onChange={setRepayDate} />
@@ -801,7 +755,7 @@ const DebtsScreen: React.FC = () => {
                 style={[styles.textInput, styles.textInputMulti]}
                 value={repayNote}
                 onChangeText={setRepayNote}
-                placeholder="..."
+                placeholder="Nhập ghi chú"
                 placeholderTextColor={colors.textLight}
                 multiline
               />
@@ -883,44 +837,14 @@ const DebtsScreen: React.FC = () => {
                     <Text style={styles.inputLabel}>
                       {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
                     </Text>
-                    <View style={styles.fundPickerRow}>
-                      {fundsDefaultFirst.map((f) => {
-                        const isSelected = deleteDebtFundId === f.id;
-                        const c = f.color ?? colors.primary;
-                        return (
-                          <TouchableOpacity
-                            key={f.id}
-                            style={[
-                              styles.fundPickItem,
-                              isSelected && { borderColor: c },
-                            ]}
-                            onPress={() => {
-                              setDeleteDebtFundId(f.id);
-                              setDeleteDebtOffsetId('');
-                            }}
-                            activeOpacity={0.75}
-                          >
-                            <View style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}>
-                              {(() => {
-                                const FundIcon = getFundIconComponent(f.icon);
-                                return <FundIcon width={18} height={18} color={c} />;
-                              })()}
-                            </View>
-                            <View style={styles.fundPickTextCol}>
-                              <Text
-                                style={[styles.fundPickText, isSelected && { color: c }]}
-                                numberOfLines={1}
-                              >
-                                {f.name}
-                              </Text>
-                              <Text style={styles.fundPickBalance}>
-                                {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
+                    <FundPicker
+                      funds={fundsDefaultFirst}
+                      selectedFundId={deleteDebtFundId}
+                      onSelect={(id) => {
+                        setDeleteDebtFundId(id);
+                        setDeleteDebtOffsetId('');
+                      }}
+                    />
 
                     {needsOffset && (
                       <>
@@ -934,57 +858,16 @@ const DebtsScreen: React.FC = () => {
                           </Text>
                         </View>
                         <Text style={styles.inputLabel}>Cấn trừ từ</Text>
-                        {(() => {
-                          const candidates = fundsDefaultFirst.filter(
-                            (f) => f.id !== deleteDebtFundId && (f.balance ?? 0) >= deficit,
-                          );
-                          if (!candidates.length) {
-                            return (
-                              <Text style={styles.deficitNoCandidate}>
-                                Không có quỹ nào đủ số dư để cấn trừ.
-                              </Text>
-                            );
-                          }
-                          return (
-                            <View style={styles.fundPickerRow}>
-                              {candidates.map((f) => {
-                                const isSelected = deleteDebtOffsetId === f.id;
-                                const c = f.color ?? colors.primary;
-                                return (
-                                  <TouchableOpacity
-                                    key={f.id}
-                                    style={[
-                                      styles.fundPickItem,
-                                      isSelected && { borderColor: c },
-                                    ]}
-                                    onPress={() => setDeleteDebtOffsetId(f.id)}
-                                    activeOpacity={0.75}
-                                  >
-                                    <View
-                                      style={[styles.fundPickIcon, { backgroundColor: c + '20' }]}
-                                    >
-                                      {(() => {
-                                        const FundIcon = getFundIconComponent(f.icon);
-                                        return <FundIcon width={18} height={18} color={c} />;
-                                      })()}
-                                    </View>
-                                    <View style={styles.fundPickTextCol}>
-                                      <Text
-                                        style={[styles.fundPickText, isSelected && { color: c }]}
-                                        numberOfLines={1}
-                                      >
-                                        {f.name}
-                                      </Text>
-                                      <Text style={styles.fundPickBalance}>
-                                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                                      </Text>
-                                    </View>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          );
-                        })()}
+                        <FundPicker
+                          funds={fundsDefaultFirst.filter(
+                            (f) =>
+                              f.id !== deleteDebtFundId &&
+                              (f.balance ?? 0) >= deficit,
+                          )}
+                          selectedFundId={deleteDebtOffsetId}
+                          onSelect={setDeleteDebtOffsetId}
+                          emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                        />
                       </>
                     )}
                   </>
@@ -1049,6 +932,30 @@ const DebtsScreen: React.FC = () => {
           </View>
         </View>
       </Modal>
+
+      <EditNoteDateModal
+        visible={!!editDebtTarget}
+        onClose={() => setEditDebtTarget(null)}
+        title="Chỉnh sửa khoản nợ"
+        subtitle={
+          editDebtTarget
+            ? `${editDebtTarget.counterparty} • ${
+                editDebtTarget.direction === 'lent' ? 'Cho vay' : 'Đi vay'
+              } • ${editDebtTarget.principal.toLocaleString('vi-VN')}đ`
+            : undefined
+        }
+        hint="Chỉ có thể sửa ghi chú và ngày giờ. Số tiền, quỹ và các giao dịch trả/thu liên quan sẽ giữ nguyên."
+        initialNote={editDebtTarget?.note ?? ''}
+        initialDate={editDebtTarget?.startDate ?? new Date()}
+        onSave={async (note, date) => {
+          if (!editDebtTarget) return;
+          await updateDebtNoteAndDate(editDebtTarget.id, {
+            note,
+            startDate: date,
+          });
+        }}
+        successMessage="Đã cập nhật khoản nợ"
+      />
     </View>
   );
 };
@@ -1106,20 +1013,22 @@ const styles = StyleSheet.create({
   },
   tabBar: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    gap: 8,
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 12,
+    padding: 4,
   },
   tabItem: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    backgroundColor: colors.backgroundSecondary,
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
   },
-  tabItemActive: { backgroundColor: colors.white },
-  tabText: { fontSize: 14, fontWeight: '700', color: colors.textSecondary },
-  tabTextActive: { color: colors.text },
+  tabItemActiveLent: { backgroundColor: '#22C55E' },
+  tabItemActiveBorrowed: { backgroundColor: '#EF4444' },
+  tabText: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
+  tabTextActive: { color: colors.white },
   totalBox: {
     marginHorizontal: 16,
     marginTop: 12,
@@ -1256,16 +1165,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.backgroundSecondary,
     borderRadius: 12,
     padding: 4,
-    gap: 4,
   },
   directionItem: {
     flex: 1,
-    paddingVertical: 10,
+    paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
   },
-  directionItemActive: { backgroundColor: colors.white },
-  directionText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  directionItemActiveLent: { backgroundColor: '#22C55E' },
+  directionItemActiveBorrowed: { backgroundColor: '#EF4444' },
+  directionText: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
+  directionTextActive: { color: colors.white },
   inputLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },
   textInput: {
     backgroundColor: colors.white,

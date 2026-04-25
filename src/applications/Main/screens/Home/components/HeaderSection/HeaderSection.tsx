@@ -36,6 +36,7 @@ interface HeaderSectionProps {
   onQuickAdd?: () => void;
   onViewDetailStats?: () => void;
   onManageFund?: () => void;
+  onOpenDebts?: () => void;
 }
 
 const HeaderSection = ({
@@ -50,6 +51,7 @@ const HeaderSection = ({
   onQuickAdd,
   onViewDetailStats,
   onManageFund,
+  onOpenDebts,
 }: HeaderSectionProps) => {
   const navigation = useNavigation<any>();
   const [unreadCount, setUnreadCount] = useState(0);
@@ -214,6 +216,17 @@ const HeaderSection = ({
           <PiggyBankIcon width={18} height={18} color={colors.white} />
         </View>
         <Text style={styles.actionLabel}>Quản lý Quỹ</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.actionItem}
+        activeOpacity={0.8}
+        onPress={onOpenDebts}
+      >
+        <View style={[styles.actionIconWrap, { backgroundColor: '#8B5CF6' }]}>
+          <WalletIcon width={18} height={18} color={colors.white} />
+        </View>
+        <Text style={styles.actionLabel}>Vay nợ</Text>
       </TouchableOpacity>
     </View>
     </View>

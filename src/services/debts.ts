@@ -295,6 +295,124 @@ export async function createDebt(
 }
 
 /**
+ * Cập nhật ghi chú + ngày bắt đầu của khoản nợ và đồng bộ với transaction gốc
+ * (Cho vay / Đi vay). Không đụng tới amount, fund hay repayments.
+ */
+export async function updateDebtNoteAndStartDate(
+  userId: string,
+  debtId: string,
+  input: { note: string | null; startDate: Date },
+): Promise<void> {
+  const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
+
+  // Tìm transaction gốc (Cho vay / Đi vay) trước khi vào runTransaction
+  // vì Firestore transactions không hỗ trợ query.
+  const principalTxSnap = await getDocs(
+    query(
+      collection(firestoreInstance, TRANSACTIONS_COLLECTION),
+      where('debtId', '==', debtId),
+      where('categoryId', 'in', [
+        LOAN_CATEGORY_IDS.lent,
+        LOAN_CATEGORY_IDS.borrowed,
+      ]),
+    ),
+  );
+
+  const noteValue = input.note?.trim() ? input.note.trim() : null;
+
+  await runTransaction(firestoreInstance, async (trx) => {
+    const debtSnap = await trx.get(debtRef);
+    if (!debtSnap.exists) {
+      throw new Error('Khoản nợ không tồn tại');
+    }
+    if (debtSnap.data()?.userId !== userId) {
+      throw new Error('Khoản nợ không thuộc về người dùng này');
+    }
+
+    trx.update(debtRef, {
+      note: noteValue,
+      startDate: input.startDate,
+      updatedAt: serverTimestamp(),
+    });
+
+    principalTxSnap.docs.forEach((d) => {
+      trx.update(d.ref, {
+        note: noteValue,
+        transactionDate: input.startDate,
+        updatedAt: serverTimestamp(),
+      });
+    });
+  });
+}
+
+/**
+ * Cập nhật ghi chú + ngày của 1 lần trả/thu nợ và đồng bộ với transaction
+ * tương ứng (nếu repayment có transactionId). Không đụng amount/fund.
+ */
+export async function updateDebtRepayment(
+  userId: string,
+  debtId: string,
+  repaymentId: string,
+  input: { note: string | null; date: Date },
+): Promise<void> {
+  const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
+  const noteValue = input.note?.trim() ? input.note.trim() : null;
+
+  await runTransaction(firestoreInstance, async (trx) => {
+    const debtSnap = await trx.get(debtRef);
+    if (!debtSnap.exists) {
+      throw new Error('Khoản nợ không tồn tại');
+    }
+    const debtData = debtSnap.data() ?? {};
+    if (debtData.userId !== userId) {
+      throw new Error('Khoản nợ không thuộc về người dùng này');
+    }
+
+    const existingRepayments = Array.isArray(debtData.repayments)
+      ? debtData.repayments
+      : [];
+    const targetIndex = existingRepayments.findIndex(
+      (r: any) => String(r?.id ?? '') === repaymentId,
+    );
+    if (targetIndex < 0) {
+      throw new Error('Không tìm thấy giao dịch trả/thu này');
+    }
+
+    const target = existingRepayments[targetIndex];
+    const linkedTxId = (target?.transactionId as string | undefined) ?? '';
+    const txRef = linkedTxId
+      ? doc(firestoreInstance, TRANSACTIONS_COLLECTION, linkedTxId)
+      : null;
+
+    // Đọc transaction tương ứng (nếu có) để runTransaction hợp lệ về thứ tự
+    // read-before-write — không bắt buộc dùng dữ liệu nhưng giữ tính atomic.
+    if (txRef) {
+      await trx.get(txRef);
+    }
+
+    const nextRepayments = existingRepayments.slice();
+    nextRepayments[targetIndex] = {
+      ...target,
+      note: noteValue,
+      date: input.date,
+    };
+
+    trx.update(debtRef, {
+      repayments: nextRepayments,
+      updatedAt: serverTimestamp(),
+    });
+
+    if (txRef) {
+      trx.update(txRef, {
+        note: noteValue,
+        transactionDate: input.date,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  });
+}
+
+/**
  * Ghi nhận trả/thu một phần cho khoản nợ — atomic:
  *  - Push 1 repayment vào mảng debts.repayments
  *  - Tạo doc transaction ngược chiều (isLoanMovement=true)

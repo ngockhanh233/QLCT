@@ -24,10 +24,14 @@ import {
   PetIcon,
   InsuranceIcon,
   InvestmentIcon,
-  LoanIcon,
   GiftIcon,
   CharityIcon,
   OtherIcon,
+  TaxIcon,
+  RepairIcon,
+  BeautyIcon,
+  HieuHiIcon,
+  LuckyMoneyOutIcon,
 } from '../assets/icons/categories';
 
 export interface IconProps {
@@ -208,16 +212,38 @@ export const EXPENDITURE_CATEGORIES: ExpenditureCategory[] = [
     color: '#4CAF50',
   },
   {
-    id: 'loan',
-    name: 'Trả nợ',
-    icon: LoanIcon,
-    color: '#9E9E9E',
+    id: 'tax',
+    name: 'Thuế',
+    icon: TaxIcon,
+    color: '#455A64',
+  },
+
+  // Dịch vụ & Sửa chữa
+  {
+    id: 'repair',
+    name: 'Sửa chữa',
+    icon: RepairIcon,
+    color: '#6D4C41',
   },
   {
-    id: 'lend',
-    name: 'Cho vay',
-    icon: LoanIcon,
-    color: '#FFB300',
+    id: 'beauty',
+    name: 'Làm đẹp',
+    icon: BeautyIcon,
+    color: '#EC407A',
+  },
+
+  // Xã giao
+  {
+    id: 'hieu_hi',
+    name: 'Hiếu hỉ',
+    icon: HieuHiIcon,
+    color: '#AD1457',
+  },
+  {
+    id: 'lucky_money_out',
+    name: 'Lì xì',
+    icon: LuckyMoneyOutIcon,
+    color: '#D81B60',
   },
 
   // Khác
@@ -256,7 +282,11 @@ export const getCategoriesByGroup = () => {
     education: EXPENDITURE_CATEGORIES.filter(c => ['education', 'books'].includes(c.id)),
     family: EXPENDITURE_CATEGORIES.filter(c => ['family', 'pet'].includes(c.id)),
     finance: EXPENDITURE_CATEGORIES.filter(c =>
-      ['insurance', 'investment', 'loan', 'lend'].includes(c.id),
+      ['insurance', 'investment', 'tax'].includes(c.id),
+    ),
+    services: EXPENDITURE_CATEGORIES.filter(c => ['repair', 'beauty'].includes(c.id)),
+    social: EXPENDITURE_CATEGORIES.filter(c =>
+      ['hieu_hi', 'lucky_money_out'].includes(c.id),
     ),
     other: EXPENDITURE_CATEGORIES.filter(c => ['gift', 'charity', 'other'].includes(c.id)),
   };

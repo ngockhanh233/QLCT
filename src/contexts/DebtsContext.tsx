@@ -14,6 +14,8 @@ import {
   addDebtRepayment,
   deleteDebt,
   deleteDebtRepayment,
+  updateDebtNoteAndStartDate,
+  updateDebtRepayment,
   debtRemaining,
   type DebtRecord,
   type DebtDirection,
@@ -25,6 +27,8 @@ type CreateDebtInput = Parameters<typeof createDebt>[1];
 type AddRepaymentInput = Parameters<typeof addDebtRepayment>[2];
 type DeleteRepaymentOpts = Parameters<typeof deleteDebtRepayment>[3];
 type DeleteDebtOpts = Parameters<typeof deleteDebt>[2];
+type UpdateDebtNoteAndDateInput = Parameters<typeof updateDebtNoteAndStartDate>[2];
+type UpdateRepaymentNoteAndDateInput = Parameters<typeof updateDebtRepayment>[3];
 
 type DebtsContextValue = {
   debts: DebtRecord[];
@@ -38,6 +42,15 @@ type DebtsContextValue = {
     opts?: DeleteRepaymentOpts,
   ) => Promise<boolean>;
   deleteDebt: (debtId: string, opts?: DeleteDebtOpts) => Promise<boolean>;
+  updateDebtNoteAndDate: (
+    debtId: string,
+    input: UpdateDebtNoteAndDateInput,
+  ) => Promise<boolean>;
+  updateRepaymentNoteAndDate: (
+    debtId: string,
+    repaymentId: string,
+    input: UpdateRepaymentNoteAndDateInput,
+  ) => Promise<boolean>;
   totalsByDirection: { lent: number; borrowed: number };
 };
 
@@ -139,6 +152,43 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     [userId, afterMutation],
   );
 
+  const updateDebtNoteAndDateCb = useCallback(
+    async (
+      debtId: string,
+      input: UpdateDebtNoteAndDateInput,
+    ): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await updateDebtNoteAndStartDate(userId, debtId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error updating debt note/date:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const updateRepaymentNoteAndDateCb = useCallback(
+    async (
+      debtId: string,
+      repaymentId: string,
+      input: UpdateRepaymentNoteAndDateInput,
+    ): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await updateDebtRepayment(userId, debtId, repaymentId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error updating repayment note/date:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
   const deleteRepaymentCb = useCallback(
     async (
       debtId: string,
@@ -179,6 +229,8 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     addRepayment: addRepaymentCb,
     deleteRepayment: deleteRepaymentCb,
     deleteDebt: deleteDebtCb,
+    updateDebtNoteAndDate: updateDebtNoteAndDateCb,
+    updateRepaymentNoteAndDate: updateRepaymentNoteAndDateCb,
     totalsByDirection,
   };
 
@@ -200,6 +252,8 @@ export function useDebts(): DebtsContextValue {
       addRepayment: async () => false,
       deleteRepayment: async () => false,
       deleteDebt: async () => false,
+      updateDebtNoteAndDate: async () => false,
+      updateRepaymentNoteAndDate: async () => false,
       totalsByDirection: { lent: 0, borrowed: 0 },
     };
   }

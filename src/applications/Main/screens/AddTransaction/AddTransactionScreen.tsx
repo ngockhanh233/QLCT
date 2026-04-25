@@ -24,13 +24,14 @@ import {
   increment,
 } from '@react-native-firebase/firestore';
 import { colors } from '../../../../utils/color';
-import { DatePicker, TimePicker, CurrencyInput, CategoryPicker } from '../../../../components';
+import { DatePicker, TimePicker, CurrencyInput, CategoryPicker, FundPicker } from '../../../../components';
 import { EXPENDITURE_CATEGORIES } from '../../../../constants/ExpenditureCategoryConstants';
 import { INCOME_CATEGORIES } from '../../../../constants/IncomeCategoryConstants';
 import { getStoredUser, pushBalanceNotification } from '../../../../services';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { showSnackbar } from '../../../../utils/snackbar';
 import { useHomeDataChanged } from '../../../../contexts/HomeDataChangedContext';
+import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
 import { type IncomePreset } from '../../../../services/incomePresets';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
@@ -53,6 +54,7 @@ const AddTransactionScreen: React.FC = () => {
   const params = route.params;
   const { markHomeDataChanged, markTransactionListNeedsRefresh } = useHomeDataChanged();
   const { funds, defaultFund, isLoading } = useFunds();
+  const { maskAmount } = useBalanceVisibility();
 
   const isEditMode = useMemo(
     () => params?.mode === 'edit' && !!params.transactionId && !!params.initialData,
@@ -298,7 +300,8 @@ const AddTransactionScreen: React.FC = () => {
     }
 
     const isSplitIncome = !isEditMode && transactionType === 'income' && splitIncomeEnabled;
-    if (!isSplitIncome && !selectedFundId) {
+    // Edit mode không cho đổi quỹ — bỏ qua validate quỹ (kể cả split income vốn không có fundId).
+    if (!isEditMode && !isSplitIncome && !selectedFundId) {
       showSnackbar({
         message: transactionType === 'expense'
           ? 'Vui lòng chọn quỹ chi tiêu'
@@ -395,64 +398,20 @@ const AddTransactionScreen: React.FC = () => {
       }
 
       if (isEditMode && params?.transactionId) {
+        // Edit mode chỉ cho phép cập nhật danh mục, ghi chú và ngày giờ.
+        // Số tiền/loại/quỹ là bất biến nên không cần đụng số dư quỹ.
         const txRef = doc(firestoreInstance, 'transactions', params.transactionId);
-        const oldData = initialData;
-        const wasExpense = oldData?.type === 'expense';
-        const isExpense = transactionType === 'expense';
-        const oldFundId = oldData?.fundId;
-        const oldAmount = oldData?.amount ?? 0;
-
-        const wasIncome = oldData?.type === 'income';
-        const oldCategoryId = oldData?.categoryId ?? '';
-        let newBalanceOldFund: number | undefined;
-        let newBalanceNewFund: number | undefined;
-
-        await runTransaction(firestoreInstance, async (transaction) => {
-          // Hoàn lại: khoản chi cũ → cộng lại quỹ cũ; khoản thu cũ → trừ lại quỹ cũ
-          if (oldFundId && oldAmount > 0) {
-            const oldFundRef = doc(firestoreInstance, 'funds', oldFundId);
-            const oldFundSnap = await transaction.get(oldFundRef);
-            if (oldFundSnap && oldFundSnap.exists()) {
-              const oldBal = (oldFundSnap.data()?.balance as number) ?? 0;
-              const deltaBack = wasExpense ? oldAmount : -oldAmount;
-              newBalanceOldFund = oldBal + deltaBack;
-              transaction.update(oldFundRef, {
-                balance: increment(deltaBack),
-                updatedAt: serverTimestamp(),
-              });
-            }
-          }
-
-          // Áp dụng mới: khoản chi → trừ quỹ; khoản thu → cộng quỹ
-          if (selectedFundId && amount > 0) {
-            const newFundRef = doc(firestoreInstance, 'funds', selectedFundId);
-            const newFundSnap = await transaction.get(newFundRef);
-            const newBal = newFundSnap.exists() ? (((newFundSnap.data()?.balance as number) ?? 0)) : 0;
-            const deltaApply = isExpense ? -amount : amount;
-            newBalanceNewFund = newBal + deltaApply;
-            transaction.update(newFundRef, {
-              balance: increment(deltaApply),
-              updatedAt: serverTimestamp(),
-            });
-          }
-
-          const updates: Record<string, any> = {
-            type: transactionType,
-            categoryId: selectedCategory,
-            amount,
-            note: note || null,
-            transactionDate: date,
-            fundId: selectedFundId,
-            updatedAt: serverTimestamp(),
-          };
-          transaction.update(txRef, updates);
+        await updateDoc(txRef, {
+          categoryId: selectedCategory,
+          note: note || null,
+          transactionDate: date,
+          updatedAt: serverTimestamp(),
         });
 
         showSnackbar({
           message: 'Đã cập nhật giao dịch',
           type: 'success',
         });
-        // Đánh dấu cần reload dữ liệu & đóng màn hình ngay, không chờ thông báo nền.
         markHomeDataChanged();
         markTransactionListNeedsRefresh();
         if (navigation.canGoBack()) {
@@ -461,71 +420,6 @@ const AddTransactionScreen: React.FC = () => {
           goHome();
         }
 
-        try {
-          const totalBefore = funds.reduce((sum, f) => sum + (f.balance ?? 0), 0);
-          const oldDelta = wasExpense ? -oldAmount : oldAmount;
-          const newDelta = isExpense ? -amount : amount;
-          const totalAfter = totalBefore + (newDelta - oldDelta);
-          const totalLabel = `${totalAfter.toLocaleString('vi-VN')}đ`;
-
-          const amountLabel = `${amount.toLocaleString('vi-VN')}đ`;
-          const oldAmountLabel = `${oldAmount.toLocaleString('vi-VN')}đ`;
-          const oldFundName = oldFundId ? (funds.find(f => f.id === oldFundId)?.name ?? 'Quỹ') : 'Quỹ';
-          const newFundName = funds.find(f => f.id === selectedFundId)?.name ?? 'Quỹ';
-          const oldCats = wasExpense ? EXPENDITURE_CATEGORIES : INCOME_CATEGORIES;
-          const newCats = isExpense ? EXPENDITURE_CATEGORIES : INCOME_CATEGORIES;
-          const newCategoryName = newCats.find(c => c.id === selectedCategory)?.name ?? 'Danh mục';
-          const oldCategoryName = oldCategoryId ? (oldCats.find(c => c.id === oldCategoryId)?.name ?? 'Danh mục') : 'Danh mục';
-          const reverseMsg = oldFundId
-            ? `Hoàn lại ${oldAmountLabel} (${oldCategoryName}) ${wasExpense ? 'vào' : 'khỏi'} "${oldFundName}".`
-            : '';
-          const applyMsg = `Áp dụng ${amountLabel} (${newCategoryName}) ${isExpense ? 'khỏi' : 'vào'} "${newFundName}".`;
-          const minus = '\u2212';
-          const fmtSignedDelta = (n: number) => {
-            const abs = Math.abs(n).toLocaleString('vi-VN');
-            return n >= 0 ? `+${abs}đ` : `${minus}${abs}đ`;
-          };
-
-          const balanceMsgParts: string[] = [];
-          // Nếu cập nhật cùng 1 quỹ (oldFundId === selectedFundId) thì gộp thành 1 dòng biến động net.
-          if (
-            oldFundId &&
-            selectedFundId &&
-            oldFundId === selectedFundId &&
-            typeof newBalanceNewFund === 'number'
-          ) {
-            const stateOldBal = funds.find((f) => f.id === selectedFundId)?.balance ?? 0;
-            const netDelta = newBalanceNewFund - stateOldBal;
-            balanceMsgParts.push(`"${newFundName}"`);
-            balanceMsgParts.push(
-              `${fmtSignedDelta(netDelta)} - Số dư: ${newBalanceNewFund.toLocaleString('vi-VN')}đ`,
-            );
-          } else {
-            if (oldFundId && typeof newBalanceOldFund === 'number') {
-              balanceMsgParts.push(`"${oldFundName}"`);
-              balanceMsgParts.push(
-                `${fmtSignedDelta(wasExpense ? oldAmount : -oldAmount)} - Số dư: ${newBalanceOldFund.toLocaleString('vi-VN')}đ`,
-              );
-            }
-            if (selectedFundId && typeof newBalanceNewFund === 'number') {
-              balanceMsgParts.push(`"${newFundName}"`);
-              balanceMsgParts.push(
-                `${fmtSignedDelta(newDelta)} - Số dư: ${newBalanceNewFund.toLocaleString('vi-VN')}đ`,
-              );
-            }
-          }
-
-          const balanceMsg = balanceMsgParts.length
-            ? `\n${balanceMsgParts.join('\n')}\nTổng số dư: ${totalLabel}`
-            : `\nTổng số dư: ${totalLabel}`;
-          void pushBalanceNotification(userId, {
-            kind: 'transaction_updated',
-            title: 'Cập nhật giao dịch',
-            message: `${reverseMsg}${reverseMsg ? '\n' : ''}${applyMsg}${balanceMsg}`,
-          });
-        } catch {
-          // ignore notification errors
-        }
       } else {
         let newFundBalanceAfter: number | undefined;
         const newFundBalancesAfter = new Map<string, number>();
@@ -856,11 +750,12 @@ const AddTransactionScreen: React.FC = () => {
               transactionType === 'expense' && styles.typeButtonActiveExpense,
             ]}
             onPress={() => {
+              if (isEditMode) return;
               setTransactionType('expense');
               setSelectedCategory('');
               setSelectedFundId(defaultFund?.id ?? '');
             }}
-            activeOpacity={0.8}
+            activeOpacity={isEditMode ? 1 : 0.8}
           >
             <Text style={[
               styles.typeButtonText,
@@ -875,11 +770,12 @@ const AddTransactionScreen: React.FC = () => {
               transactionType === 'income' && styles.typeButtonActiveIncome,
             ]}
             onPress={() => {
+              if (isEditMode) return;
               setTransactionType('income');
               setSelectedCategory('');
               setSelectedFundId(defaultFund?.id ?? '');
             }}
-            activeOpacity={0.8}
+            activeOpacity={isEditMode ? 1 : 0.8}
           >
             <Text style={[
               styles.typeButtonText,
@@ -900,7 +796,8 @@ const AddTransactionScreen: React.FC = () => {
             inputStyle={styles.amountText}
             suffixStyle={styles.amountSuffix}
             editable={
-              !(!isEditMode && transactionType === 'income' && splitIncomeEnabled)
+              !isEditMode &&
+              !(transactionType === 'income' && splitIncomeEnabled)
             }
           />
         </View>
@@ -929,7 +826,11 @@ const AddTransactionScreen: React.FC = () => {
         {/* Fund Selection - Cả thu và chi đều chọn quỹ */}
         <View style={styles.inputGroup}>
           <Text style={styles.inputLabel}>
-            {transactionType === 'expense' ? 'Quỹ chi tiêu *' : 'Quỹ nhận tiền *'}
+            {isEditMode && initialData?.isSplitIncome
+              ? 'Quỹ phân bổ'
+              : transactionType === 'expense'
+              ? 'Quỹ chi tiêu *'
+              : 'Quỹ nhận tiền *'}
           </Text>
         {!isEditMode && transactionType === 'income' && funds.length > 1 && (
           <View style={styles.splitToggleRow}>
@@ -982,6 +883,36 @@ const AddTransactionScreen: React.FC = () => {
               >
                 <Text style={styles.fundEmptyText}>Chưa có quỹ nào. Nhấn để tạo quỹ</Text>
               </TouchableOpacity>
+            ) : isEditMode && initialData?.isSplitIncome ? (
+              <View style={styles.splitReadonlyContainer}>
+                {(initialData.incomeSplits ?? []).map((s, idx) => {
+                  const fund = funds.find((f) => f.id === s.fundId);
+                  const fundName = fund?.name ?? 'Quỹ đã bị xóa';
+                  const fundColor = fund?.color ?? colors.primary;
+                  const FundIcon = getFundIconComponent(fund?.icon);
+                  return (
+                    <View
+                      key={`${s.fundId || 'missing'}_${idx}`}
+                      style={styles.splitReadonlyRow}
+                    >
+                      <View
+                        style={[
+                          styles.splitReadonlyIcon,
+                          { backgroundColor: fundColor + '20' },
+                        ]}
+                      >
+                        <FundIcon width={18} height={18} color={fundColor} />
+                      </View>
+                      <Text style={styles.splitReadonlyName} numberOfLines={1}>
+                        {fundName}
+                      </Text>
+                      <Text style={styles.splitReadonlyAmount}>
+                        +{(s.amount || 0).toLocaleString('vi-VN')}đ
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
             ) : (
               splitIncomeEnabled && !isEditMode && transactionType === 'income' ? (
                 <View style={styles.splitContainer}>
@@ -1162,7 +1093,7 @@ const AddTransactionScreen: React.FC = () => {
                                     {fund.name}
                                   </Text>
                                   <Text style={styles.fundItemBalance}>
-                                    {fund.balance.toLocaleString('vi-VN')}đ
+                                    {maskAmount(fund.balance)}
                                   </Text>
                                 </TouchableOpacity>
                               );
@@ -1241,7 +1172,7 @@ const AddTransactionScreen: React.FC = () => {
                 {fundsDefaultFirst.map((fund) => {
                   const isSelected = selectedFundId === fund.id;
                   const fundColor = fund.color ?? colors.primary;
-                  
+
                   return (
                     <TouchableOpacity
                       key={fund.id}
@@ -1249,9 +1180,13 @@ const AddTransactionScreen: React.FC = () => {
                         styles.fundItem,
                         isSelected && styles.fundItemActive,
                         isSelected && { borderColor: fundColor },
+                        isEditMode && !isSelected && { opacity: 0.5 },
                       ]}
-                      onPress={() => setSelectedFundId(fund.id)}
-                      activeOpacity={0.7}
+                      onPress={() => {
+                        if (isEditMode) return;
+                        setSelectedFundId(fund.id);
+                      }}
+                      activeOpacity={isEditMode ? 1 : 0.7}
                     >
                       <View
                         style={[styles.fundItemIcon, { backgroundColor: fundColor + '20' }]}
@@ -1271,7 +1206,7 @@ const AddTransactionScreen: React.FC = () => {
                         {fund.name}
                       </Text>
                       <Text style={styles.fundItemBalance}>
-                        {fund.balance.toLocaleString('vi-VN')}đ
+                        {maskAmount(fund.balance)}
                       </Text>
                     </TouchableOpacity>
                   );
@@ -1351,83 +1286,27 @@ const AddTransactionScreen: React.FC = () => {
 
           <Text style={styles.deficitHint}>Chọn quỹ để trừ bù số tiền thiếu</Text>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={{ marginTop: 10 }}
-            contentContainerStyle={styles.deficitSourcesScrollContainer}
-          >
-            {(() => {
-              if (isLoading) {
-                return (
-                  <View style={{ paddingVertical: 18 }}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={{ marginTop: 8, color: colors.textSecondary, textAlign: 'center' }}>
-                      Đang tải danh sách quỹ...
-                    </Text>
-                  </View>
-                );
-              }
-
-              const coverableFunds = fundsDefaultFirst.filter(
-                (f) => f.id !== expenseTargetFundId && (f.balance ?? 0) >= expenseDeficitAmount,
-              );
-
-              if (!coverableFunds.length) {
-                return (
-                  <Text style={{ marginTop: 10, color: colors.textSecondary, textAlign: 'center' }}>
-                    Không có quỹ nào đủ số dư để cấn trừ
-                  </Text>
-                );
-              }
-
-              return coverableFunds.map((f) => {
-                const isSelected = expenseSourceFundId === f.id;
-                return (
-                  <TouchableOpacity
-                    key={f.id}
-                    disabled={expenseDeficitSaving}
-                    activeOpacity={0.8}
-                    onPress={() => setExpenseSourceFundId(f.id)}
-                    style={[
-                      styles.deficitSourceRow,
-                      isSelected && styles.deficitSourceRowSelected,
-                    ]}
-                  >
-                        <View style={styles.deficitSourceLeft}>
-                          <View
-                            style={[
-                              styles.deficitSourceIcon,
-                              { backgroundColor: (f.color ?? colors.primary) + '20' },
-                            ]}
-                          >
-                            {(() => {
-                              const FundIcon = getFundIconComponent(f.icon);
-                              const c = f.color ?? colors.primary;
-                              return <FundIcon width={18} height={18} color={c} />;
-                            })()}
-                          </View>
-                        </View>
-                        <View style={styles.deficitSourceTextWrap}>
-                      <Text
-                        style={styles.deficitSourceName}
-                        numberOfLines={1}
-                        ellipsizeMode="tail"
-                      >
-                        {f.name ?? 'Quỹ'}
-                      </Text>
-                      <Text
-                        style={styles.deficitSourceBalance}
-                        numberOfLines={1}
-                      >
-                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              });
-            })()}
-          </ScrollView>
+          {isLoading ? (
+            <View style={{ paddingVertical: 18 }}>
+              <ActivityIndicator size="small" color={colors.primary} />
+              <Text style={{ marginTop: 8, color: colors.textSecondary, textAlign: 'center' }}>
+                Đang tải danh sách quỹ...
+              </Text>
+            </View>
+          ) : (
+            <FundPicker
+              layout="horizontal"
+              funds={fundsDefaultFirst.filter(
+                (f) =>
+                  f.id !== expenseTargetFundId &&
+                  (f.balance ?? 0) >= expenseDeficitAmount,
+              )}
+              selectedFundId={expenseSourceFundId}
+              onSelect={setExpenseSourceFundId}
+              emptyText="Không có quỹ nào đủ số dư để cấn trừ"
+              containerStyle={{ marginTop: 10 }}
+            />
+          )}
 
           <View style={styles.deficitActions}>
             <TouchableOpacity
@@ -1720,6 +1599,40 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     shadowOffset: { width: 0, height: 2 },
     elevation: 1,
+  },
+  splitReadonlyContainer: {
+    marginTop: 8,
+    padding: 10,
+    borderRadius: 14,
+    backgroundColor: colors.backgroundSecondary,
+    gap: 8,
+  },
+  splitReadonlyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: colors.white,
+  },
+  splitReadonlyIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  splitReadonlyName: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '500',
+    color: colors.text,
+  },
+  splitReadonlyAmount: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.success,
   },
   splitRow: {
     flexDirection: 'column',

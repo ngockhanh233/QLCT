@@ -12,6 +12,10 @@ import {
   SellIcon,
   RefundIcon,
   OtherIncomeIcon,
+  SocialWelfareIcon,
+  LuckyMoneyInIcon,
+  CongratsMoneyIcon,
+  PrizeIcon,
 } from '../assets/icons/categories';
 
 export interface IconProps {
@@ -56,6 +60,12 @@ export const INCOME_CATEGORIES: IncomeCategory[] = [
     name: 'Phụ cấp',
     icon: AllowanceIcon,
     color: '#2196F3',
+  },
+  {
+    id: 'social_welfare',
+    name: 'Trợ cấp xã hội',
+    icon: SocialWelfareIcon,
+    color: '#26A69A',
   },
 
   // Kinh doanh & Bán hàng
@@ -114,16 +124,28 @@ export const INCOME_CATEGORIES: IncomeCategory[] = [
     color: '#F44336',
   },
   {
+    id: 'lucky_money_in',
+    name: 'Lì xì',
+    icon: LuckyMoneyInIcon,
+    color: '#D81B60',
+  },
+  {
+    id: 'hieu_hi_in',
+    name: 'Tiền mừng',
+    icon: CongratsMoneyIcon,
+    color: '#C2185B',
+  },
+  {
+    id: 'prize',
+    name: 'Trúng thưởng',
+    icon: PrizeIcon,
+    color: '#FFB300',
+  },
+  {
     id: 'rental',
     name: 'Cho thuê',
     icon: RentalIcon,
     color: '#4CAF50',
-  },
-  {
-    id: 'debt_collection',
-    name: 'Thu nợ',
-    icon: RefundIcon,
-    color: '#FF9800',
   },
   {
     id: 'other_income',
@@ -140,13 +162,20 @@ export const getIncomeCategoryById = (id: string): IncomeCategory | undefined =>
 export const getIncomeCategoriesByGroup = () => {
   return {
     bonus: INCOME_CATEGORIES.filter(c =>
-      ['salary', 'pension', 'bonus', 'allowance'].includes(c.id),
+      ['salary', 'pension', 'bonus', 'allowance', 'social_welfare'].includes(c.id),
     ),
     business: INCOME_CATEGORIES.filter(c => ['sell', 'freelance'].includes(c.id)),
     liquidation: INCOME_CATEGORIES.filter(c => ['liquidation', 'refund'].includes(c.id)),
     investment: INCOME_CATEGORIES.filter(c => ['investment', 'interest', 'dividend'].includes(c.id)),
     other: INCOME_CATEGORIES.filter(c =>
-      ['gift', 'rental', 'debt_collection', 'other_income'].includes(c.id),
+      [
+        'gift',
+        'lucky_money_in',
+        'hieu_hi_in',
+        'prize',
+        'rental',
+        'other_income',
+      ].includes(c.id),
     ),
   };
 };

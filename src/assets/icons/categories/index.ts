@@ -44,3 +44,16 @@ export { default as OtherIncomeIcon } from './OtherIncomeIcon';
 export { default as HousingIcon } from './HousingIcon';
 export { default as UtilitiesIcon } from './UtilitiesIcon';
 export { default as SubscriptionIcon } from './SubscriptionIcon';
+
+// Income Icons — bổ sung
+export { default as SocialWelfareIcon } from './SocialWelfareIcon';
+export { default as LuckyMoneyInIcon } from './LuckyMoneyInIcon';
+export { default as CongratsMoneyIcon } from './CongratsMoneyIcon';
+export { default as PrizeIcon } from './PrizeIcon';
+
+// Expenditure Icons — bổ sung
+export { default as TaxIcon } from './TaxIcon';
+export { default as RepairIcon } from './RepairIcon';
+export { default as BeautyIcon } from './BeautyIcon';
+export { default as HieuHiIcon } from './HieuHiIcon';
+export { default as LuckyMoneyOutIcon } from './LuckyMoneyOutIcon';

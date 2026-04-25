@@ -18,7 +18,7 @@ import WalletIcon from '../../../../assets/icons/WalletIcon';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import AddIcon from '../../../../assets/icons/AddIcon';
 import { useFunds } from './hooks/useFunds';
-import { CurrencyInput, SwipeableRow, ErrorPopup } from '../../../../components';
+import { CurrencyInput, SwipeableRow, ErrorPopup, FundPicker } from '../../../../components';
 import { confirm } from '../../../../utils/confirm';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
 import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
@@ -599,56 +599,17 @@ const FundManagementScreen: React.FC = () => {
               {deleteTransferEnabled &&
                 funds.filter((f) => f.id !== deletingFund.id).length > 0 && (
                   <>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={styles.sourceFundScroll}
-                      contentContainerStyle={styles.sourceFundContainer}
-                    >
-                      {fundsDefaultFirst
-                        .filter((f) => f.id !== deletingFund.id)
-                        .map((fund) => {
-                          const isSelected = deleteTargetFundId === fund.id;
-                          const fColor = fund.color ?? colors.primary;
-                          return (
-                            <TouchableOpacity
-                              key={fund.id}
-                              style={[
-                                styles.sourceFundItem,
-                                isSelected && styles.sourceFundItemActive,
-                                isSelected && { borderColor: fColor },
-                              ]}
-                              onPress={() => setDeleteTargetFundId(fund.id)}
-                              activeOpacity={0.75}
-                              disabled={deleteSaving}
-                            >
-                              <View
-                                style={[
-                                  styles.sourceFundIcon,
-                                  { backgroundColor: fColor + '20' },
-                                ]}
-                              >
-                              {(() => {
-                                const FundIcon = getFundIconComponent(fund.icon);
-                                return <FundIcon width={18} height={18} color={fColor} />;
-                              })()}
-                              </View>
-                              <Text
-                                style={[
-                                  styles.sourceFundText,
-                                  isSelected && { color: fColor, fontWeight: '700' },
-                                ]}
-                                numberOfLines={1}
-                              >
-                                {fund.name}
-                              </Text>
-                              <Text style={styles.sourceFundBalance}>
-                                {fund.balance.toLocaleString('vi-VN')}đ
-                              </Text>
-                            </TouchableOpacity>
-                          );
-                        })}
-                    </ScrollView>
+                    <FundPicker
+                      layout="horizontal"
+                      funds={fundsDefaultFirst.filter(
+                        (f) => f.id !== deletingFund.id,
+                      )}
+                      selectedFundId={deleteTargetFundId}
+                      onSelect={(id) => {
+                        if (deleteSaving) return;
+                        setDeleteTargetFundId(id);
+                      }}
+                    />
                     <Text style={styles.sheetHint}>
                       Số dư sẽ được chuyển sang quỹ bạn chọn trước khi xóa.
                     </Text>
@@ -895,60 +856,14 @@ const FundManagementScreen: React.FC = () => {
                 </View>
                 {fundBalance > 0 && funds.length > 0 && useSourceFundForInitial && (
                   <>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.sheetFundGrid}
-                    >
-                      {fundsDefaultFirst.map((fund) => {
-                        const isSelected = newFundSourceId === fund.id;
-                        const fColor = fund.color ?? colors.primary;
-                        const isInsufficient = (fund.balance ?? 0) < fundBalance;
-                        return (
-                          <TouchableOpacity
-                            key={fund.id}
-                            style={[
-                              styles.sheetFundItem,
-                              isSelected && styles.sheetFundItemActive,
-                              isSelected && { borderColor: fColor },
-                              isInsufficient && styles.sheetFundItemDisabled,
-                            ]}
-                            onPress={() => setNewFundSourceId(fund.id)}
-                            activeOpacity={0.75}
-                            disabled={isInsufficient}
-                          >
-                            <View
-                              style={[
-                                styles.sheetFundIcon,
-                                { backgroundColor: fColor + '20' },
-                              ]}
-                            >
-                                {(() => {
-                                  const FundIcon = getFundIconComponent(fund.icon);
-                                  return <FundIcon width={20} height={20} color={fColor} />;
-                                })()}
-                            </View>
-                            <Text
-                              style={[
-                                styles.sheetFundText,
-                                isSelected && { color: fColor, fontWeight: '700' },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {fund.name}
-                            </Text>
-                            <Text style={styles.sheetFundBalance}>
-                              {fund.balance.toLocaleString('vi-VN')}đ
-                            </Text>
-                            {isInsufficient && (
-                              <Text style={styles.sheetFundInsufficient}>
-                                Không đủ
-                              </Text>
-                            )}
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
+                    <FundPicker
+                      layout="horizontal"
+                      funds={fundsDefaultFirst}
+                      selectedFundId={newFundSourceId}
+                      onSelect={setNewFundSourceId}
+                      isDisabled={(f) => (f.balance ?? 0) < fundBalance}
+                      disabledReason={() => 'Không đủ'}
+                    />
                     <Text style={styles.sheetHint}>
                       Quỹ bị trừ tiền để tạo số dư ban đầu cho quỹ mới.
                     </Text>
@@ -1085,53 +1000,14 @@ const FundManagementScreen: React.FC = () => {
           </View>
 
           {useSourceFundForTopUp && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.sourceFundScroll}
-              contentContainerStyle={styles.sourceFundContainer}
-            >
-              {fundsDefaultFirst
-                .filter((f) => f.id !== topUpFundItem?.id)
-                .map((fund) => {
-                  const isSelected = topUpSourceFundId === fund.id;
-                  const fundColor = fund.color ?? colors.primary;
-                  const isInsufficient = (fund.balance ?? 0) < topUpAmount;
-                  return (
-                    <TouchableOpacity
-                      key={fund.id}
-                      style={[
-                        styles.sourceFundItem,
-                        isSelected && styles.sourceFundItemActive,
-                        isSelected && { borderColor: fundColor },
-                        isInsufficient && styles.sourceFundItemDisabled,
-                      ]}
-                      onPress={() => setTopUpSourceFundId(fund.id)}
-                      activeOpacity={0.7}
-                      disabled={isInsufficient}
-                    >
-                      <View style={[styles.sourceFundIcon, { backgroundColor: fundColor + '20' }]}>
-                        {(() => {
-                          const FundIcon = getFundIconComponent(fund.icon);
-                          return <FundIcon width={18} height={18} color={fundColor} />;
-                        })()}
-                      </View>
-                      <Text
-                        style={[styles.sourceFundText, isSelected && { color: fundColor }]}
-                        numberOfLines={1}
-                      >
-                        {fund.name}
-                      </Text>
-                      <Text style={styles.sourceFundBalance}>
-                        {fund.balance.toLocaleString('vi-VN')}đ
-                      </Text>
-                      {isInsufficient && (
-                        <Text style={styles.sourceFundInsufficient}>Không đủ</Text>
-                      )}
-                    </TouchableOpacity>
-                  );
-                })}
-            </ScrollView>
+            <FundPicker
+              layout="horizontal"
+              funds={fundsDefaultFirst.filter((f) => f.id !== topUpFundItem?.id)}
+              selectedFundId={topUpSourceFundId}
+              onSelect={setTopUpSourceFundId}
+              isDisabled={(f) => (f.balance ?? 0) < topUpAmount}
+              disabledReason={() => 'Không đủ'}
+            />
           )}
           {!useSourceFundForTopUp && (
             <Text style={styles.sheetHint}>
@@ -1204,46 +1080,12 @@ const FundManagementScreen: React.FC = () => {
           </View>
 
           {useTargetFundForWithdraw && withdrawFundItem && (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.sourceFundScroll}
-            >
-              {fundsDefaultFirst
-                .filter((f) => f.id !== withdrawFundItem.id)
-                .map((fund) => {
-                  const isSelected = withdrawTargetFundId === fund.id;
-                  const fundColor = fund.color ?? colors.primary;
-                  return (
-                    <TouchableOpacity
-                      key={fund.id}
-                      style={[
-                        styles.sourceFundItem,
-                        isSelected && styles.sourceFundItemActive,
-                        isSelected && { borderColor: fundColor },
-                      ]}
-                      onPress={() => setWithdrawTargetFundId(fund.id)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.sourceFundIcon, { backgroundColor: fundColor + '20' }]}>
-                        {(() => {
-                          const FundIcon = getFundIconComponent(fund.icon);
-                          return <FundIcon width={18} height={18} color={fundColor} />;
-                        })()}
-                      </View>
-                      <Text
-                        style={[styles.sourceFundText, isSelected && { color: fundColor }]}
-                        numberOfLines={1}
-                      >
-                        {fund.name}
-                      </Text>
-                      <Text style={styles.sourceFundBalance}>
-                        {fund.balance.toLocaleString('vi-VN')}đ
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-            </ScrollView>
+            <FundPicker
+              layout="horizontal"
+              funds={fundsDefaultFirst.filter((f) => f.id !== withdrawFundItem.id)}
+              selectedFundId={withdrawTargetFundId}
+              onSelect={setWithdrawTargetFundId}
+            />
           )}
           {!useTargetFundForWithdraw && (
             <Text style={styles.sheetHint}>

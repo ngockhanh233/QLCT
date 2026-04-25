@@ -12,7 +12,9 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
+  Switch,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import Modal from 'react-native-modal';
@@ -31,6 +33,7 @@ import { colors } from '../../../../utils/color';
 import { getStoredUser } from '../../../../services';
 import type { MonthSummary } from '../Home/hooks';
 import { useFunds } from '../FundManagement/hooks/useFunds';
+import { useDebts } from '../../../../contexts/DebtsContext';
 import { SpendingDistributionSection } from '../Home/components';
 import RNFS from 'react-native-fs';
 import XLSX from 'xlsx';
@@ -48,6 +51,8 @@ const MAX_ITEMS = 1000;
 
 const firestoreInstance = getFirestore(getApp());
 const transactionsCollection = collection(firestoreInstance, COLLECTION_NAME);
+
+const STORAGE_KEY_INCLUDE_LOAN_STATS = 'finance_report_include_loan';
 
 function startOfMonth(d: Date): Date {
   const x = new Date(d);
@@ -99,6 +104,7 @@ function formatAmountShort(amount: number): string {
 async function fetchMonthSummaryForDate(
   userId: string,
   baseDate: Date,
+  includeLoan: boolean,
 ): Promise<MonthSummary> {
   const start = startOfMonth(baseDate);
   const end = endOfMonth(baseDate);
@@ -138,12 +144,16 @@ async function fetchMonthSummaryForDate(
       amount: (data.amount as number) ?? 0,
       type: data.type as 'income' | 'expense',
       transactionDate: date,
+      isLoanMovement: data.isLoanMovement === true,
     };
   });
 
+  // Tùy `includeLoan`: tính cả vay/nợ hay chỉ tx thường.
   const thisMonth = items.filter(
-    (t: { transactionDate: Date }) =>
-      t.transactionDate >= start && t.transactionDate <= end,
+    (t: { transactionDate: Date; isLoanMovement: boolean }) =>
+      t.transactionDate >= start &&
+      t.transactionDate <= end &&
+      (includeLoan || t.isLoanMovement !== true),
   );
 
   let totalIncome = 0;
@@ -180,6 +190,7 @@ async function fetchMonthSummaryForDate(
 async function fetchYearPoints(
   userId: string,
   year: number,
+  includeLoan: boolean,
 ): Promise<YearMonthPoint[]> {
   const start = new Date(year, 0, 1, 0, 0, 0, 0);
   const end = new Date(year, 11, 31, 23, 59, 59, 999);
@@ -224,6 +235,10 @@ async function fetchYearPoints(
     if (!date || date.getFullYear() !== year) {
       return;
     }
+    // Tùy `includeLoan`: loại vay/nợ khỏi biểu đồ năm.
+    if (!includeLoan && data.isLoanMovement === true) {
+      return;
+    }
 
     const monthIndex = date.getMonth();
     const amount = (data.amount as number) ?? 0;
@@ -245,11 +260,37 @@ const FinanceReportScreen: React.FC = () => {
     useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const { funds } = useFunds();
+  const { debts, totalsByDirection } = useDebts();
 
   const [userId, setUserId] = useState<string | null>(null);
   const [selectedMonthDate, setSelectedMonthDate] = useState<Date>(
     () => new Date(),
   );
+  const [includeLoanInStats, setIncludeLoanInStatsState] = useState(false);
+
+  // Load persisted toggle on mount.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(STORAGE_KEY_INCLUDE_LOAN_STATS)
+      .then((v) => {
+        if (!cancelled && v === 'true') setIncludeLoanInStatsState(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleIncludeLoanInStats = useCallback(() => {
+    setIncludeLoanInStatsState((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(
+        STORAGE_KEY_INCLUDE_LOAN_STATS,
+        next ? 'true' : 'false',
+      ).catch(() => {});
+      return next;
+    });
+  }, []);
   const [monthSummary, setMonthSummary] = useState<MonthSummary>({
     totalIncome: 0,
     totalExpense: 0,
@@ -319,7 +360,11 @@ const FinanceReportScreen: React.FC = () => {
 
     try {
       setIsMonthLoading(true);
-      const summary = await fetchMonthSummaryForDate(userId, selectedMonthDate);
+      const summary = await fetchMonthSummaryForDate(
+        userId,
+        selectedMonthDate,
+        includeLoanInStats,
+      );
       setMonthSummary(summary);
     } catch (error) {
       console.error('Error loading selected month summary:', error);
@@ -332,7 +377,7 @@ const FinanceReportScreen: React.FC = () => {
     } finally {
       setIsMonthLoading(false);
     }
-  }, [userId, selectedMonthDate]);
+  }, [userId, selectedMonthDate, includeLoanInStats]);
 
   const loadPrevMonth = useCallback(async () => {
     try {
@@ -351,6 +396,7 @@ const FinanceReportScreen: React.FC = () => {
       const summary = await fetchMonthSummaryForDate(
         userId,
         prevMonthDate,
+        includeLoanInStats,
       );
       setPrevMonthSummary(summary);
     } catch (error) {
@@ -359,7 +405,7 @@ const FinanceReportScreen: React.FC = () => {
     } finally {
       setIsPrevLoading(false);
     }
-  }, [userId, selectedMonthDate]);
+  }, [userId, selectedMonthDate, includeLoanInStats]);
 
   const loadYearSummary = useCallback(async () => {
     try {
@@ -370,7 +416,7 @@ const FinanceReportScreen: React.FC = () => {
       }
 
       const year = selectedMonthDate.getFullYear();
-      const points = await fetchYearPoints(userId, year);
+      const points = await fetchYearPoints(userId, year, includeLoanInStats);
       setYearPoints(points);
     } catch (error) {
       console.error('Error loading yearly summary:', error);
@@ -395,6 +441,58 @@ const FinanceReportScreen: React.FC = () => {
     () => funds.reduce((sum, f) => sum + ((f.balance as number) ?? 0), 0),
     [funds],
   );
+
+  // Thống kê vay/nợ: (1) outstanding tổng thể, (2) hoạt động trong tháng đang chọn.
+  const debtMonthStats = useMemo(() => {
+    const year = selectedMonthDate.getFullYear();
+    const month = selectedMonthDate.getMonth();
+    const inMonth = (d: Date | null | undefined): boolean => {
+      if (!d) return false;
+      return d.getFullYear() === year && d.getMonth() === month;
+    };
+
+    let newLentCount = 0;
+    let newLentAmount = 0;
+    let newBorrowedCount = 0;
+    let newBorrowedAmount = 0;
+    let receivedCount = 0;
+    let receivedAmount = 0;
+    let paidCount = 0;
+    let paidAmount = 0;
+
+    for (const d of debts) {
+      if (inMonth(d.startDate)) {
+        if (d.direction === 'lent') {
+          newLentCount += 1;
+          newLentAmount += d.principal;
+        } else {
+          newBorrowedCount += 1;
+          newBorrowedAmount += d.principal;
+        }
+      }
+      for (const r of d.repayments ?? []) {
+        if (!inMonth(r.date)) continue;
+        if (d.direction === 'lent') {
+          receivedCount += 1;
+          receivedAmount += r.amount;
+        } else {
+          paidCount += 1;
+          paidAmount += r.amount;
+        }
+      }
+    }
+
+    return {
+      newLentCount,
+      newLentAmount,
+      newBorrowedCount,
+      newBorrowedAmount,
+      receivedCount,
+      receivedAmount,
+      paidCount,
+      paidAmount,
+    };
+  }, [debts, selectedMonthDate]);
 
   const prevIncome = prevMonthSummary?.totalIncome ?? 0;
   const prevExpense = prevMonthSummary?.totalExpense ?? 0;
@@ -632,6 +730,24 @@ const FinanceReportScreen: React.FC = () => {
           </TouchableOpacity>
         </View>
 
+        <View style={styles.loanToggleRow}>
+          <View style={styles.loanToggleTextWrap}>
+            <Text style={styles.loanToggleTitle}>Tính khoản vay/nợ</Text>
+            <Text style={styles.loanToggleHint}>
+              Cộng dồn các giao dịch vay/nợ vào tổng thu chi và biểu đồ.
+            </Text>
+          </View>
+          <Switch
+            value={includeLoanInStats}
+            onValueChange={toggleIncludeLoanInStats}
+            thumbColor={colors.white}
+            trackColor={{
+              false: colors.backgroundSecondary,
+              true: colors.primary,
+            }}
+          />
+        </View>
+
         <View style={styles.summaryCard}>
           <View style={styles.summaryHeaderRow}>
             <View style={styles.summaryHeaderLeft}>
@@ -684,6 +800,108 @@ const FinanceReportScreen: React.FC = () => {
             showDetailButton={false}
             onPressCategory={handleCategoryDetail}
           />
+        </View>
+
+        {/* Thống kê vay nợ */}
+        <View style={styles.sectionCard}>
+          <Text style={styles.sectionTitle}>Vay nợ</Text>
+
+          {/* Tầng 1: Outstanding tổng thể */}
+          <View style={styles.debtOutstandingBlock}>
+            <Text style={styles.debtBlockLabel}>Tổng outstanding</Text>
+            <View style={styles.debtOutstandingRow}>
+              <View style={styles.debtOutstandingCell}>
+                <Text style={styles.debtCellLabel}>Phải thu</Text>
+                <Text
+                  style={[styles.debtCellAmount, { color: colors.success }]}
+                >
+                  {totalsByDirection.lent.toLocaleString('vi-VN')}đ
+                </Text>
+              </View>
+              <View style={styles.debtDivider} />
+              <View style={styles.debtOutstandingCell}>
+                <Text style={styles.debtCellLabel}>Phải trả</Text>
+                <Text
+                  style={[styles.debtCellAmount, { color: colors.error }]}
+                >
+                  {totalsByDirection.borrowed.toLocaleString('vi-VN')}đ
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Tầng 2: Hoạt động trong tháng đang chọn */}
+          <View style={styles.debtMonthBlock}>
+            <Text style={styles.debtBlockLabel}>
+              Hoạt động tháng {selectedMonthDate.getMonth() + 1}
+            </Text>
+            <View style={styles.debtActivityGrid}>
+              <View style={styles.debtActivityItem}>
+                <Text style={styles.debtActivityTitle}>Cho vay mới</Text>
+                <Text
+                  style={[
+                    styles.debtActivityAmount,
+                    { color: colors.success },
+                  ]}
+                >
+                  {debtMonthStats.newLentAmount.toLocaleString('vi-VN')}đ
+                </Text>
+                <Text style={styles.debtActivityCount}>
+                  {debtMonthStats.newLentCount} khoản
+                </Text>
+              </View>
+              <View style={styles.debtActivityItem}>
+                <Text style={styles.debtActivityTitle}>Đi vay mới</Text>
+                <Text
+                  style={[
+                    styles.debtActivityAmount,
+                    { color: colors.error },
+                  ]}
+                >
+                  {debtMonthStats.newBorrowedAmount.toLocaleString('vi-VN')}đ
+                </Text>
+                <Text style={styles.debtActivityCount}>
+                  {debtMonthStats.newBorrowedCount} khoản
+                </Text>
+              </View>
+              <View style={styles.debtActivityItem}>
+                <Text style={styles.debtActivityTitle}>Thu nợ</Text>
+                <Text
+                  style={[
+                    styles.debtActivityAmount,
+                    { color: colors.success },
+                  ]}
+                >
+                  {debtMonthStats.receivedAmount.toLocaleString('vi-VN')}đ
+                </Text>
+                <Text style={styles.debtActivityCount}>
+                  {debtMonthStats.receivedCount} lần
+                </Text>
+              </View>
+              <View style={styles.debtActivityItem}>
+                <Text style={styles.debtActivityTitle}>Trả nợ</Text>
+                <Text
+                  style={[
+                    styles.debtActivityAmount,
+                    { color: colors.error },
+                  ]}
+                >
+                  {debtMonthStats.paidAmount.toLocaleString('vi-VN')}đ
+                </Text>
+                <Text style={styles.debtActivityCount}>
+                  {debtMonthStats.paidCount} lần
+                </Text>
+              </View>
+            </View>
+            {debtMonthStats.newLentCount === 0 &&
+              debtMonthStats.newBorrowedCount === 0 &&
+              debtMonthStats.receivedCount === 0 &&
+              debtMonthStats.paidCount === 0 && (
+                <Text style={styles.debtEmptyHint}>
+                  Không có hoạt động vay/nợ trong tháng này.
+                </Text>
+              )}
+          </View>
         </View>
 
         <View style={styles.sectionCard}>
@@ -953,6 +1171,32 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  loanToggleRow: {
+    marginTop: 12,
+    marginHorizontal: 20,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: colors.backgroundSecondary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  loanToggleTextWrap: {
+    flex: 1,
+    flexDirection: 'column',
+    gap: 2,
+  },
+  loanToggleTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  loanToggleHint: {
+    fontSize: 11,
+    color: colors.textSecondary,
+  },
   monthNavBtn: {
     width: 30,
     height: 30,
@@ -1170,6 +1414,79 @@ const styles = StyleSheet.create({
     marginTop: 16,
     borderRadius: 20,
     padding: 20,
+  },
+  debtOutstandingBlock: {
+    marginTop: 10,
+  },
+  debtBlockLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    marginBottom: 8,
+  },
+  debtOutstandingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  debtOutstandingCell: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  debtCellLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textSecondary,
+  },
+  debtCellAmount: {
+    marginTop: 4,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  debtDivider: {
+    width: 1,
+    height: 28,
+    backgroundColor: colors.border,
+  },
+  debtMonthBlock: {
+    marginTop: 16,
+  },
+  debtActivityGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  debtActivityItem: {
+    width: '48%',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: colors.backgroundSecondary,
+  },
+  debtActivityTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  debtActivityAmount: {
+    marginTop: 4,
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  debtActivityCount: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textLight,
+  },
+  debtEmptyHint: {
+    marginTop: 10,
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    textAlign: 'center',
   },
   sectionBlock: {
     marginHorizontal: 20,

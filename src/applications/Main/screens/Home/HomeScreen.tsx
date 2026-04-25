@@ -182,6 +182,7 @@ const HomeScreen = () => {
               onQuickAdd={onQuickAdd}
               onViewDetailStats={onViewDetailStats}
               onManageFund={onManageFund}
+              onOpenDebts={onOpenDebts}
             />
             <TouchableOpacity
               style={styles.debtsCard}

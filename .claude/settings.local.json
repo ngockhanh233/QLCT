@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "PowerShell($path = 'c:\\\\Projects\\\\QLCT\\\\src\\\\applications\\\\Main\\\\screens\\\\AddTransaction\\\\AddTransactionScreen.tsx'; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.UTF8Encoding]::new\\($false\\)\\); $before = $lines[0..418]; $after = $lines[485..\\($lines.Length - 1\\)]; $new = $before + $after; [System.IO.File]::WriteAllLines\\($path, $new, [System.Text.UTF8Encoding]::new\\($false\\)\\); Write-Output \\('Lines after: ' + $new.Length\\))",
+      "Bash(awk 'NR==1769 || NR==1866' \"c:/Projects/QLCT/src/applications/Main/screens/Transaction/TransactionScreen.tsx\")",
+      "PowerShell($path = 'c:\\\\Projects\\\\QLCT\\\\src\\\\applications\\\\Main\\\\screens\\\\Transaction\\\\TransactionScreen.tsx'; $lines = [System.IO.File]::ReadAllLines\\($path, [System.Text.UTF8Encoding]::new\\($false\\)\\); $before = $lines[0..1768]; $replacement = @\\('', '      <EditDebtModal', '        debt={editDebtTarget}', '        onClose={\\(\\) => setEditDebtTarget\\(null\\)}', '      />'\\); $after = $lines[1866..\\($lines.Length - 1\\)]; $new = $before + $replacement + $after; [System.IO.File]::WriteAllLines\\($path, $new, [System.Text.UTF8Encoding]::new\\($false\\)\\); Write-Output \\('Lines after: ' + $new.Length\\))"
     ]
   }
 }

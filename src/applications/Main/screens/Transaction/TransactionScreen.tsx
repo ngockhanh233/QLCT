@@ -17,6 +17,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { DatePicker, MonthPicker } from '../../../../components';
+import EditNoteDateModal from '../Debts/components/EditNoteDateModal';
 import Modal from 'react-native-modal';
 import { colors } from '../../../../utils/color';
 import { getExpenseCategory, getIncomeCategory } from '../../../../utils/categoryUtils';
@@ -26,13 +27,12 @@ import {
   type TransactionTimeFilter,
 } from './hooks/useTransactions';
 import CalendarIcon from '../../../../assets/icons/CalendarIcon';
-import { Skeleton, SwipeableRow, ErrorPopup } from '../../../../components';
+import { Skeleton, SwipeableRow, ErrorPopup, FundPicker } from '../../../../components';
 import { useHomeDataChanged } from '../../../../contexts/HomeDataChangedContext';
 import type { RootStackParamList } from '../../MainScreen';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import { useFunds } from '../FundManagement/hooks/useFunds';
-import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 import Svg, { Path } from 'react-native-svg';
 import TransactionFilterPanel from './components/TransactionFilterPanel';
 import { useDebts } from '../../../../contexts/DebtsContext';
@@ -170,6 +170,7 @@ const TransactionScreen: React.FC = () => {
   const [deleteDebtFundId, setDeleteDebtFundId] = useState<string>('');
   const [deleteDebtOffsetId, setDeleteDebtOffsetId] = useState<string>('');
   const [isDeletingDebt, setIsDeletingDebt] = useState(false);
+  const [editDebtTarget, setEditDebtTarget] = useState<DebtRecord | null>(null);
   const [isCustomDate, setIsCustomDate] = useState(false);
   const [filterModeModalVisible, setFilterModeModalVisible] = useState(false);
   const {
@@ -189,7 +190,7 @@ const TransactionScreen: React.FC = () => {
   } = useTransactions();
 
   const { funds, refresh: refreshFunds, transferToFund } = useFunds();
-  const { debts, deleteDebt: deleteDebtFromCtx } = useDebts();
+  const { debts, deleteDebt: deleteDebtFromCtx, updateDebtNoteAndDate } = useDebts();
   const debtById = useMemo(() => {
     const map = new Map<string, typeof debts[number]>();
     debts.forEach((d) => map.set(d.id, d));
@@ -717,7 +718,7 @@ const TransactionScreen: React.FC = () => {
             </View>
           </View>
           {!!item.note && (
-            <Text style={styles.transactionNote} numberOfLines={1}>
+            <Text style={styles.transactionNote}>
               {item.note}
             </Text>
           )}
@@ -758,6 +759,10 @@ const TransactionScreen: React.FC = () => {
     setDeleteDebtFundId('');
     setDeleteDebtOffsetId('');
   }, [isDeletingDebt]);
+
+  const openEditDebtModal = (debt: DebtRecord) => {
+    setEditDebtTarget(debt);
+  };
 
   const handleConfirmDeleteDebt = async () => {
     if (!deleteDebtTarget) return;
@@ -820,6 +825,9 @@ const TransactionScreen: React.FC = () => {
 
     return (
       <SwipeableRow
+        onEdit={
+          debtForSwipe ? () => openEditDebtModal(debtForSwipe) : undefined
+        }
         onDelete={
           debtForSwipe ? () => openDeleteDebtModal(debtForSwipe) : undefined
         }
@@ -1014,6 +1022,8 @@ const TransactionScreen: React.FC = () => {
           note: item.note,
           fundId: item.fundId ?? undefined,
           transactionDate: item.rawDate.toISOString(),
+          isSplitIncome: !!isSplitIncomeItem,
+          incomeSplits: item.incomeSplits ?? null,
         },
       });
     };
@@ -1043,11 +1053,10 @@ const TransactionScreen: React.FC = () => {
 
     return (
       <SwipeableRow
-        // Tạm thời không cho sửa giao dịch
-        onEdit={undefined}
+        onEdit={handleEdit}
         onDelete={handleDelete}
         borderRadius={14}
-        
+
       >
         <TouchableOpacity style={styles.transactionItem} activeOpacity={0.7}>
           <View style={[styles.transactionIcon, { backgroundColor: category.color + '15' }]}>
@@ -1056,7 +1065,7 @@ const TransactionScreen: React.FC = () => {
           <View style={styles.transactionInfo}>
             <Text style={styles.transactionCategory}>{category.name}</Text>
             {!!item.note && (
-              <Text style={styles.transactionNote} numberOfLines={1}>
+              <Text style={styles.transactionNote}>
                 {item.note}
               </Text>
             )}
@@ -1352,76 +1361,35 @@ const TransactionScreen: React.FC = () => {
               </View>
 
               <Text style={styles.adjustLabel}>Chọn quỹ để trừ bù phần thiếu</Text>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.adjustFundRow}
-                keyboardShouldPersistTaps="handled"
-              >
-                {(() => {
-                  const totalDeficit = splitDeficits.reduce(
-                    (sum, d) => sum + d.deficit,
-                    0,
-                  );
-                  const incomeSplitsByFund = new Map<string, number>();
-                  deleteItem?.incomeSplits?.forEach(split => {
-                    incomeSplitsByFund.set(split.fundId, split.amount);
-                  });
-
-                  return fundsDefaultFirst
-                    .map(fund => {
-                      const fundColor = fund.color ?? colors.primary;
-                      const currentBalance = fund.balance ?? 0;
-                      const ownSplit = incomeSplitsByFund.get(fund.id) ?? 0;
-                      const ownTruable = Math.min(currentBalance, ownSplit);
-                      const balanceAfterRevert = currentBalance - ownTruable;
-                      const canUse = balanceAfterRevert >= totalDeficit;
-                      if (!canUse) return null;
-
-                      const isSelected = splitRefundFundId === fund.id;
-                      return (
-                        <TouchableOpacity
-                          key={fund.id}
-                          activeOpacity={0.75}
-                          onPress={() => {
-                            if (deleteSaving) return;
-                            setSplitRefundFundId(fund.id);
-                          }}
-                          disabled={deleteSaving}
-                          style={[
-                            styles.adjustFundItem,
-                            isSelected && {
-                              borderColor: fundColor,
-                              backgroundColor: fundColor + '10',
-                            },
-                          ]}
-                        >
-                          <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
-                            {(() => {
-                              const FundIcon = getFundIconComponent(fund.icon);
-                              return <FundIcon width={18} height={18} color={fundColor} />;
-                            })()}
-                          </View>
-                          <View style={styles.adjustFundTextCol}>
-                            <Text
-                              style={[
-                                styles.adjustFundName,
-                                isSelected && { color: fundColor, fontWeight: '800' },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {fund.name}
-                            </Text>
-                            <Text style={styles.adjustFundBalance}>
-                              {currentBalance.toLocaleString('vi-VN')}đ
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })
-                    .filter(Boolean);
-                })()}
-              </ScrollView>
+              {(() => {
+                const totalDeficit = splitDeficits.reduce(
+                  (sum, d) => sum + d.deficit,
+                  0,
+                );
+                const incomeSplitsByFund = new Map<string, number>();
+                deleteItem?.incomeSplits?.forEach((split) => {
+                  incomeSplitsByFund.set(split.fundId, split.amount);
+                });
+                const usable = fundsDefaultFirst.filter((fund) => {
+                  const currentBalance = fund.balance ?? 0;
+                  const ownSplit = incomeSplitsByFund.get(fund.id) ?? 0;
+                  const balanceAfterRevert =
+                    currentBalance - Math.min(currentBalance, ownSplit);
+                  return balanceAfterRevert >= totalDeficit;
+                });
+                return (
+                  <FundPicker
+                    layout="horizontal"
+                    funds={usable}
+                    selectedFundId={splitRefundFundId}
+                    onSelect={(id) => {
+                      if (deleteSaving) return;
+                      setSplitRefundFundId(id);
+                    }}
+                    emptyText="Không có quỹ nào đủ số dư để cấn trừ"
+                  />
+                );
+              })()}
 
               <View style={styles.adjustButtons}>
                 <TouchableOpacity
@@ -1575,52 +1543,14 @@ const TransactionScreen: React.FC = () => {
                     <Text style={styles.debtDeleteLabel}>
                       {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
                     </Text>
-                    <View style={styles.debtDeleteFundRow}>
-                      {fundsDefaultFirst.map((f) => {
-                        const isSelected = deleteDebtFundId === f.id;
-                        const c = f.color ?? colors.primary;
-                        return (
-                          <TouchableOpacity
-                            key={f.id}
-                            style={[
-                              styles.debtDeleteFundItem,
-                              isSelected && { borderColor: c },
-                            ]}
-                            onPress={() => {
-                              setDeleteDebtFundId(f.id);
-                              setDeleteDebtOffsetId('');
-                            }}
-                            activeOpacity={0.75}
-                          >
-                            <View
-                              style={[
-                                styles.debtDeleteFundIcon,
-                                { backgroundColor: c + '20' },
-                              ]}
-                            >
-                              {(() => {
-                                const FundIcon = getFundIconComponent(f.icon);
-                                return <FundIcon width={18} height={18} color={c} />;
-                              })()}
-                            </View>
-                            <View style={styles.debtDeleteFundTextCol}>
-                              <Text
-                                style={[
-                                  styles.debtDeleteFundText,
-                                  isSelected && { color: c },
-                                ]}
-                                numberOfLines={1}
-                              >
-                                {f.name}
-                              </Text>
-                              <Text style={styles.debtDeleteFundBalance}>
-                                {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                              </Text>
-                            </View>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
+                    <FundPicker
+                      funds={fundsDefaultFirst}
+                      selectedFundId={deleteDebtFundId}
+                      onSelect={(id) => {
+                        setDeleteDebtFundId(id);
+                        setDeleteDebtOffsetId('');
+                      }}
+                    />
 
                     {needsOffset && (
                       <>
@@ -1634,64 +1564,16 @@ const TransactionScreen: React.FC = () => {
                           </Text>
                         </View>
                         <Text style={styles.debtDeleteLabel}>Cấn trừ từ</Text>
-                        {(() => {
-                          const candidates = fundsDefaultFirst.filter(
+                        <FundPicker
+                          funds={fundsDefaultFirst.filter(
                             (f) =>
-                              f.id !== deleteDebtFundId && (f.balance ?? 0) >= deficit,
-                          );
-                          if (!candidates.length) {
-                            return (
-                              <Text style={styles.debtDeleteNoCandidate}>
-                                Không có quỹ nào đủ số dư để cấn trừ.
-                              </Text>
-                            );
-                          }
-                          return (
-                            <View style={styles.debtDeleteFundRow}>
-                              {candidates.map((f) => {
-                                const isSelected = deleteDebtOffsetId === f.id;
-                                const c = f.color ?? colors.primary;
-                                return (
-                                  <TouchableOpacity
-                                    key={f.id}
-                                    style={[
-                                      styles.debtDeleteFundItem,
-                                      isSelected && { borderColor: c },
-                                    ]}
-                                    onPress={() => setDeleteDebtOffsetId(f.id)}
-                                    activeOpacity={0.75}
-                                  >
-                                    <View
-                                      style={[
-                                        styles.debtDeleteFundIcon,
-                                        { backgroundColor: c + '20' },
-                                      ]}
-                                    >
-                                      {(() => {
-                                        const FundIcon = getFundIconComponent(f.icon);
-                                        return <FundIcon width={18} height={18} color={c} />;
-                                      })()}
-                                    </View>
-                                    <View style={styles.debtDeleteFundTextCol}>
-                                      <Text
-                                        style={[
-                                          styles.debtDeleteFundText,
-                                          isSelected && { color: c },
-                                        ]}
-                                        numberOfLines={1}
-                                      >
-                                        {f.name}
-                                      </Text>
-                                      <Text style={styles.debtDeleteFundBalance}>
-                                        {(f.balance ?? 0).toLocaleString('vi-VN')}đ
-                                      </Text>
-                                    </View>
-                                  </TouchableOpacity>
-                                );
-                              })}
-                            </View>
-                          );
-                        })()}
+                              f.id !== deleteDebtFundId &&
+                              (f.balance ?? 0) >= deficit,
+                          )}
+                          selectedFundId={deleteDebtOffsetId}
+                          onSelect={setDeleteDebtOffsetId}
+                          emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                        />
                       </>
                     )}
                   </>
@@ -1757,6 +1639,31 @@ const TransactionScreen: React.FC = () => {
         </View>
       </Modal>
 
+
+      <EditNoteDateModal
+        visible={!!editDebtTarget}
+        onClose={() => setEditDebtTarget(null)}
+        title="Chỉnh sửa khoản nợ"
+        subtitle={
+          editDebtTarget
+            ? `${editDebtTarget.counterparty} • ${
+                editDebtTarget.direction === 'lent' ? 'Cho vay' : 'Đi vay'
+              } • ${editDebtTarget.principal.toLocaleString('vi-VN')}đ`
+            : undefined
+        }
+        hint="Chỉ có thể sửa ghi chú và ngày giờ. Số tiền, quỹ và các giao dịch trả/thu liên quan sẽ giữ nguyên."
+        initialNote={editDebtTarget?.note ?? ''}
+        initialDate={editDebtTarget?.startDate ?? new Date()}
+        onSave={async (note, date) => {
+          if (!editDebtTarget) return;
+          await updateDebtNoteAndDate(editDebtTarget.id, {
+            note,
+            startDate: date,
+          });
+        }}
+        successMessage="Đã cập nhật khoản nợ"
+      />
+
       {/* Modal bù tiền để xóa khoản thu khi quỹ không đủ */}
       <Modal
         isVisible={adjustModalVisible}
@@ -1780,60 +1687,19 @@ const TransactionScreen: React.FC = () => {
           </Text>
 
           <Text style={styles.adjustLabel}>Chọn quỹ để trừ</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.adjustFundRow}
-            keyboardShouldPersistTaps="handled"
-          >
-            {fundsDefaultFirst
-              .filter(f => f.id !== adjustTargetFundId)
-              .map(fund => {
-                const isSelected = adjustSourceFundId === fund.id;
-                const canUse = (fund.balance ?? 0) >= adjustDeficit && adjustDeficit > 0;
-                const fundColor = fund.color ?? colors.primary;
-                return (
-                  <TouchableOpacity
-                    key={fund.id}
-                    activeOpacity={0.75}
-                    onPress={() => {
-                      if (!canUse) return;
-                      setAdjustSourceFundId(fund.id);
-                    }}
-                    disabled={!canUse || adjustSaving}
-                    style={[
-                      styles.adjustFundItem,
-                      isSelected && { borderColor: fundColor, backgroundColor: fundColor + '10' },
-                      (!canUse || adjustDeficit <= 0) && styles.adjustFundItemDisabled,
-                    ]}
-                  >
-                    <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
-                      {(() => {
-                        const FundIcon = getFundIconComponent(fund.icon);
-                        return <FundIcon width={18} height={18} color={fundColor} />;
-                      })()}
-                    </View>
-                    <View style={styles.adjustFundTextCol}>
-                      <Text
-                        style={[
-                          styles.adjustFundName,
-                          isSelected && { color: fundColor, fontWeight: '800' },
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {fund.name}
-                      </Text>
-                      <Text style={styles.adjustFundBalance}>
-                        {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
-                      </Text>
-                      {!canUse && (
-                        <Text style={styles.adjustFundHint}>Không đủ số dư</Text>
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-          </ScrollView>
+          <FundPicker
+            layout="horizontal"
+            funds={fundsDefaultFirst.filter((f) => f.id !== adjustTargetFundId)}
+            selectedFundId={adjustSourceFundId}
+            onSelect={(id) => {
+              if (adjustSaving) return;
+              setAdjustSourceFundId(id);
+            }}
+            isDisabled={(f) =>
+              (f.balance ?? 0) < adjustDeficit || adjustDeficit <= 0
+            }
+            disabledReason={() => 'Không đủ số dư'}
+          />
 
           <View style={styles.adjustButtons}>
             <TouchableOpacity
@@ -2020,51 +1886,15 @@ const TransactionScreen: React.FC = () => {
               ) && (
                 <>
                   <Text style={styles.adjustLabel}>Chọn quỹ để hoàn tiền</Text>
-                  <ScrollView
-                    ref={deleteFundScrollRef}
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.adjustFundRow}
-                    keyboardShouldPersistTaps="handled"
-                  >
-                    {fundsDefaultFirst.map(fund => {
-                      const isSelected = deleteRefundFundId === fund.id;
-                      const fundColor = fund.color ?? colors.primary;
-                      return (
-                        <TouchableOpacity
-                          key={fund.id}
-                          activeOpacity={0.75}
-                          onPress={() => setDeleteRefundFundId(fund.id)}
-                          disabled={deleteSaving}
-                          style={[
-                            styles.adjustFundItem,
-                            isSelected && { borderColor: fundColor, backgroundColor: fundColor + '10' },
-                          ]}
-                        >
-                          <View style={[styles.adjustFundIcon, { backgroundColor: fundColor + '20' }]}>
-                            {(() => {
-                              const FundIcon = getFundIconComponent(fund.icon);
-                              return <FundIcon width={18} height={18} color={fundColor} />;
-                            })()}
-                          </View>
-                          <View style={styles.adjustFundTextCol}>
-                            <Text
-                              style={[
-                                styles.adjustFundName,
-                                isSelected && { color: fundColor, fontWeight: '800' },
-                              ]}
-                              numberOfLines={1}
-                            >
-                              {fund.name}
-                            </Text>
-                            <Text style={styles.adjustFundBalance}>
-                              {(fund.balance ?? 0).toLocaleString('vi-VN')}đ
-                            </Text>
-                          </View>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
+                  <FundPicker
+                    layout="horizontal"
+                    funds={fundsDefaultFirst}
+                    selectedFundId={deleteRefundFundId}
+                    onSelect={(id) => {
+                      if (deleteSaving) return;
+                      setDeleteRefundFundId(id);
+                    }}
+                  />
                 </>
               )}
 
@@ -3388,26 +3218,28 @@ const styles = StyleSheet.create({
     color: colors.white,
   },
   transactionNote: {
+    marginTop: 5,
     fontSize: 13,
     color: colors.textSecondary,
   },
   transactionFund: {
-    marginTop: 0,
+    marginTop: 5,
     fontSize: 12,
-    fontWeight: '600',
-    color: colors.textLight,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   transactionFundBlock: {
     marginTop: 0,
   },
   transactionFundTitle: {
     fontSize: 12,
-    fontWeight: '600',
-    color: colors.textLight,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   transactionFundLine: {
     fontSize: 12,
-    color: colors.textLight,
+    fontWeight: '700',
+    color: colors.textSecondary,
   },
   transactionFundDeleted: {
     fontSize: 12,
