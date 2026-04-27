@@ -48,6 +48,7 @@ async function fetchFunds(userId: string): Promise<FundRecord[]> {
       color: data.color as string | undefined,
       icon: (data.icon as string | null | undefined) ?? undefined,
       isDefault: data.isDefault as boolean | undefined,
+      goalAmount: (data.goalAmount as number | null | undefined) ?? null,
       createdAt: (data.createdAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
       updatedAt: (data.updatedAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
     };
@@ -127,6 +128,8 @@ type FundsContextValue = {
   defaultFund: FundRecord | undefined;
   isLoading: boolean;
   refresh: () => Promise<void> | void;
+  /** Refetch nhưng KHÔNG flip isLoading — dùng cho focus effect để tránh flash spinner. */
+  refreshSilent: () => Promise<void> | void;
   ensureDefaultFundAndReload: () => Promise<string | null>;
   createFund: (
     name: string,
@@ -134,10 +137,17 @@ type FundsContextValue = {
     color?: string,
     isDefault?: boolean,
     icon?: string | null,
+    goalAmount?: number | null,
   ) => Promise<string | null>;
   updateFund: (
     id: string,
-    updates: { name?: string; color?: string; isDefault?: boolean; icon?: string | null },
+    updates: {
+      name?: string;
+      color?: string;
+      isDefault?: boolean;
+      icon?: string | null;
+      goalAmount?: number | null;
+    },
   ) => Promise<boolean>;
   setFundBalance: (id: string, newBalance: number) => Promise<boolean>;
   topUpFund: (id: string, amount: number) => Promise<boolean>;
@@ -168,8 +178,8 @@ function useFundsInternal(): FundsContextValue {
     [funds],
   );
 
-  const loadFunds = useCallback(async (uid: string) => {
-    setIsLoading(true);
+  const loadFunds = useCallback(async (uid: string, silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const items = await fetchFunds(uid);
       setFunds(items);
@@ -180,7 +190,7 @@ function useFundsInternal(): FundsContextValue {
         type: 'error',
       });
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   }, []);
 
@@ -216,8 +226,14 @@ function useFundsInternal(): FundsContextValue {
       color?: string,
       isDefault: boolean = false,
       icon?: string | null,
+      goalAmount?: number | null,
     ): Promise<string | null> => {
       if (!userId) return null;
+
+      const goalAmt =
+        typeof goalAmount === 'number' && goalAmount > 0
+          ? Math.round(goalAmount)
+          : null;
 
       try {
         const docRef = await addDoc(fundsCollection, {
@@ -227,6 +243,7 @@ function useFundsInternal(): FundsContextValue {
           color: color ?? null,
           icon: icon ?? null,
           isDefault: isDefault || false,
+          goalAmount: goalAmt,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -264,7 +281,13 @@ function useFundsInternal(): FundsContextValue {
   const updateFund = useCallback(
     async (
       id: string,
-      updates: { name?: string; color?: string; isDefault?: boolean; icon?: string | null },
+      updates: {
+        name?: string;
+        color?: string;
+        isDefault?: boolean;
+        icon?: string | null;
+        goalAmount?: number | null;
+      },
     ): Promise<boolean> => {
       if (!userId) return false;
 
@@ -745,6 +768,10 @@ function useFundsInternal(): FundsContextValue {
     if (userId) await loadFunds(userId);
   }, [userId, loadFunds]);
 
+  const refreshSilent = useCallback(async () => {
+    if (userId) await loadFunds(userId, true);
+  }, [userId, loadFunds]);
+
   const ensureDefaultFundAndReload = useCallback(async (): Promise<string | null> => {
     if (!userId) return null;
     const id = await ensureDefaultFund(userId);
@@ -759,6 +786,7 @@ function useFundsInternal(): FundsContextValue {
     defaultFund,
     isLoading,
     refresh,
+    refreshSilent,
     ensureDefaultFundAndReload,
     createFund,
     updateFund,

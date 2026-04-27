@@ -1,6 +1,6 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Switch } from 'react-native';
-import { DatePicker } from '../../../../../components';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { DatePicker, AppSwitch } from '../../../../../components';
 import { colors } from '../../../../../utils/color';
 import type { TransactionTimeFilter } from '../hooks/useTransactions';
 
@@ -101,14 +101,10 @@ const TransactionFilterPanel: React.FC<TransactionFilterPanelProps> = ({
           {loanToggleVisible && (
             <View style={styles.loanToggleWrap}>
               <Text style={styles.loanToggleLabel}>Vay nợ</Text>
-              <Switch
+              <AppSwitch
                 value={showLoan}
                 onValueChange={onShowLoanChange}
-                thumbColor={colors.white}
-                trackColor={{
-                  false: colors.backgroundSecondary,
-                  true: colors.primary,
-                }}
+                size="sm"
               />
             </View>
           )}

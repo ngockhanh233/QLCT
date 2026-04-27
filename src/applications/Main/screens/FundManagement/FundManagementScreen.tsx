@@ -8,7 +8,6 @@ import {
   TextInput,
   RefreshControl,
   ActivityIndicator,
-  Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -18,7 +17,7 @@ import WalletIcon from '../../../../assets/icons/WalletIcon';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import AddIcon from '../../../../assets/icons/AddIcon';
 import { useFunds } from './hooks/useFunds';
-import { CurrencyInput, SwipeableRow, ErrorPopup, FundPicker } from '../../../../components';
+import { CurrencyInput, SwipeableRow, ErrorPopup, FundPicker, AppSwitch } from '../../../../components';
 import { confirm } from '../../../../utils/confirm';
 import { useIncomePresets } from '../../../../contexts/IncomePresetsContext';
 import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
@@ -51,6 +50,7 @@ const FundManagementScreen: React.FC = () => {
     defaultFund,
     isLoading,
     refresh,
+    refreshSilent,
     createFund,
     updateFund,
     transferToFund,
@@ -63,12 +63,12 @@ const FundManagementScreen: React.FC = () => {
   const { presets: incomePresets, savePresets } = useIncomePresets();
   const { maskAmount } = useBalanceVisibility();
 
-  // Khi chuyển qua tab Quỹ, luôn refresh để cập nhật số dư mới nhất
-  // (ví dụ vừa xóa giao dịch ở tab Giao dịch).
+  // Khi chuyển qua tab Quỹ, refresh trong background (không flip isLoading) để
+  // không gây flash spinner khi tab đã có data sẵn.
   useFocusEffect(
     useCallback(() => {
-      refresh();
-    }, [refresh]),
+      refreshSilent();
+    }, [refreshSilent]),
   );
 
   const [modalVisible, setModalVisible] = useState(false);
@@ -77,6 +77,8 @@ const FundManagementScreen: React.FC = () => {
   const [fundBalance, setFundBalance] = useState(0);
   const [fundColor, setFundColor] = useState(FUND_COLORS[0]);
   const [fundIconId, setFundIconId] = useState<string>(DEFAULT_FUND_ICON_ID);
+  const [formGoalAmount, setFormGoalAmount] = useState(0);
+  const [formHasGoal, setFormHasGoal] = useState(false);
   const [topUpModalVisible, setTopUpModalVisible] = useState(false);
   const [topUpFundItem, setTopUpFundItem] = useState<FundRecord | null>(null);
   const [topUpAmount, setTopUpAmount] = useState(0);
@@ -118,6 +120,8 @@ const FundManagementScreen: React.FC = () => {
     setFundColor(FUND_COLORS[0]);
     setFundIconId(DEFAULT_FUND_ICON_ID);
     setUseSourceFundForInitial(true);
+    setFormGoalAmount(0);
+    setFormHasGoal(false);
     setModalVisible(true);
   };
 
@@ -127,6 +131,9 @@ const FundManagementScreen: React.FC = () => {
     setFundBalance(fund.balance);
     setFundColor(fund.color ?? FUND_COLORS[0]);
     setFundIconId(fund.icon ?? DEFAULT_FUND_ICON_ID);
+    const hasGoal = !!fund.goalAmount && fund.goalAmount > 0;
+    setFormGoalAmount(fund.goalAmount ?? 0);
+    setFormHasGoal(hasGoal);
     setModalVisible(true);
   };
 
@@ -193,21 +200,35 @@ const FundManagementScreen: React.FC = () => {
       }
     }
 
+    const goalAmt = Math.max(0, Math.round(formGoalAmount));
+    const hasGoal = formHasGoal && goalAmt > 0;
+
     setIsSaving(true);
     try {
       if (editingFund) {
-        await updateFund(editingFund.id, { name, color: fundColor, icon: fundIconId });
+        await updateFund(editingFund.id, {
+          name,
+          color: fundColor,
+          icon: fundIconId,
+          goalAmount: hasGoal ? goalAmt : null,
+        });
         setModalVisible(false);
       } else {
         const initialBalance = useSourceFundForInitial ? 0 : fundBalance;
-        const newId = await createFund(name, initialBalance, fundColor, false, fundIconId);
+        const newId = await createFund(
+          name,
+          initialBalance,
+          fundColor,
+          false,
+          fundIconId,
+          hasGoal ? goalAmt : null,
+        );
         if (newId) {
+          let transferOk = true;
           if (useSourceFundForInitial && fundBalance > 0 && newFundSourceId) {
-            const ok = await transferToFund(newId, fundBalance, newFundSourceId);
-            if (ok) setModalVisible(false);
-          } else {
-            setModalVisible(false);
+            transferOk = await transferToFund(newId, fundBalance, newFundSourceId);
           }
+          if (transferOk) setModalVisible(false);
         }
       }
     } finally {
@@ -418,7 +439,6 @@ const FundManagementScreen: React.FC = () => {
                       styles.fundCard,
                       fund.isDefault && styles.defaultFundCard,
                     ]}
-                    // onPress={() => openEditModal(fund)}
                     onLongPress={() => {
                       if (fund.isDefault) {
                         openEditModal(fund);
@@ -463,6 +483,51 @@ const FundManagementScreen: React.FC = () => {
                           Quỹ chính (dùng khi bạn không chọn quỹ)
                         </Text>
                       )}
+                      {!!fund.goalAmount && fund.goalAmount > 0 && (() => {
+                        const fundColor = fund.color ?? colors.primary;
+                        const balance = fund.balance ?? 0;
+                        const target = fund.goalAmount;
+                        const pct = Math.min(
+                          100,
+                          Math.round((balance / target) * 100),
+                        );
+                        const reached = balance >= target;
+                        return (
+                          <View style={styles.fundGoalBlock}>
+                            <View style={styles.fundGoalTopRow}>
+                              <Text
+                                style={styles.fundGoalDesc}
+                                numberOfLines={1}
+                              >
+                                Mục tiêu: {maskAmount(target)}
+                              </Text>
+                              <Text
+                                style={[
+                                  styles.fundGoalPct,
+                                  {
+                                    color: reached ? colors.success : fundColor,
+                                  },
+                                ]}
+                              >
+                                {pct}%
+                              </Text>
+                            </View>
+                            <View style={styles.fundGoalTrack}>
+                              <View
+                                style={[
+                                  styles.fundGoalFill,
+                                  {
+                                    width: `${pct}%`,
+                                    backgroundColor: reached
+                                      ? colors.success
+                                      : fundColor,
+                                  },
+                                ]}
+                              />
+                            </View>
+                          </View>
+                        );
+                      })()}
                     </View>
                   </TouchableOpacity>
                 </SwipeableRow>
@@ -532,6 +597,7 @@ const FundManagementScreen: React.FC = () => {
             >
               <Text style={styles.actionSecondaryText}>Chỉnh sửa</Text>
             </TouchableOpacity>
+
           </View>
         </View>
       </Modal>
@@ -581,15 +647,12 @@ const FundManagementScreen: React.FC = () => {
           {deletingFund && deletingFund.balance > 0 && (
             <>
               <View style={[styles.sourceToggleRow, { marginTop: 16 }]}>
-                <Text style={styles.inputLabel}>Chuyển số dư sang quỹ khác</Text>
-                <Switch
+                <Text style={[styles.inputLabel, styles.toggleRowLabel]}>
+                  Chuyển số dư sang quỹ khác
+                </Text>
+                <AppSwitch
                   value={deleteTransferEnabled}
                   onValueChange={(value) => setDeleteTransferEnabled(value)}
-                  thumbColor={deleteTransferEnabled ? colors.white : colors.white}
-                  trackColor={{
-                    false: colors.backgroundSecondary,
-                    true: colors.primary,
-                  }}
                   disabled={
                     funds.filter((f) => f.id !== deletingFund.id).length === 0
                   }
@@ -843,15 +906,12 @@ const FundManagementScreen: React.FC = () => {
             {!editingFund && (
               <View style={styles.inputGroup}>
                 <View style={styles.sourceToggleRow}>
-                  <Text style={styles.inputLabel}>Rút từ quỹ khác</Text>
-                  <Switch
+                  <Text style={[styles.inputLabel, styles.toggleRowLabel]}>
+                    Rút từ quỹ khác
+                  </Text>
+                  <AppSwitch
                     value={useSourceFundForInitial}
                     onValueChange={setUseSourceFundForInitial}
-                    thumbColor={useSourceFundForInitial ? colors.white : colors.white}
-                    trackColor={{
-                      false: colors.backgroundSecondary,
-                      true: colors.primary,
-                    }}
                   />
                 </View>
                 {fundBalance > 0 && funds.length > 0 && useSourceFundForInitial && (
@@ -876,6 +936,30 @@ const FundManagementScreen: React.FC = () => {
                 )}
               </View>
             )}
+
+            <View style={styles.inputGroup}>
+              <View style={styles.sourceToggleRow}>
+                <Text style={[styles.inputLabel, styles.toggleRowLabel]}>
+                  Mục tiêu tiết kiệm
+                </Text>
+                <AppSwitch
+                  value={formHasGoal}
+                  onValueChange={setFormHasGoal}
+                />
+              </View>
+              {formHasGoal && (
+                <View style={styles.amountSection}>
+                  <CurrencyInput
+                    value={formGoalAmount}
+                    onChange={setFormGoalAmount}
+                    placeholder="0"
+                    inputWrapperStyle={styles.fundAmountInput}
+                    inputStyle={styles.fundAmountText}
+                    suffixStyle={styles.fundAmountSuffix}
+                  />
+                </View>
+              )}
+            </View>
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Màu sắc</Text>
@@ -987,15 +1071,12 @@ const FundManagementScreen: React.FC = () => {
           </View>
 
           <View style={styles.sourceToggleRow}>
-            <Text style={styles.inputLabel}>Rút từ quỹ khác</Text>
-            <Switch
+            <Text style={[styles.inputLabel, styles.toggleRowLabel]}>
+              Rút từ quỹ khác
+            </Text>
+            <AppSwitch
               value={useSourceFundForTopUp}
               onValueChange={setUseSourceFundForTopUp}
-              thumbColor={useSourceFundForTopUp ? colors.white : colors.white}
-              trackColor={{
-                false: colors.backgroundSecondary,
-                true: colors.primary,
-              }}
             />
           </View>
 
@@ -1067,15 +1148,12 @@ const FundManagementScreen: React.FC = () => {
           </View>
 
           <View style={styles.sourceToggleRow}>
-            <Text style={styles.inputLabel}>Chuyển sang quỹ khác</Text>
-            <Switch
+            <Text style={[styles.inputLabel, styles.toggleRowLabel]}>
+              Chuyển sang quỹ khác
+            </Text>
+            <AppSwitch
               value={useTargetFundForWithdraw}
               onValueChange={setUseTargetFundForWithdraw}
-              thumbColor={useTargetFundForWithdraw ? colors.white : colors.white}
-              trackColor={{
-                false: colors.backgroundSecondary,
-                true: colors.primary,
-              }}
             />
           </View>
 
@@ -1263,6 +1341,35 @@ const styles = StyleSheet.create({
     fontWeight: '500',
     color: colors.textSecondary,
   },
+  fundGoalBlock: {
+    marginTop: 10,
+    gap: 6,
+  },
+  fundGoalTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  fundGoalDesc: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textLight,
+  },
+  fundGoalPct: {
+    fontSize: 12,
+    fontWeight: '900',
+    minWidth: 36,
+    textAlign: 'right',
+  },
+  fundGoalTrack: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.inputBackground,
+    overflow: 'hidden',
+  },
+  fundGoalFill: { height: '100%', borderRadius: 3 },
   sourceFundScroll: {
     maxHeight: 100,
     marginBottom: 8,
@@ -1514,6 +1621,10 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginTop: 16,
     marginBottom: 8,
+  },
+  toggleRowLabel: {
+    marginTop: 0,
+    marginBottom: 0,
   },
   textInput: {
     backgroundColor: colors.inputBackground,

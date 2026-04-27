@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
@@ -14,6 +15,8 @@ import { useMonthTransactions } from './hooks';
 import { useDebts } from '../../../../contexts/DebtsContext';
 import { useBalanceVisibility } from '../../../../contexts/BalanceVisibilityContext';
 
+const STORAGE_KEY_HOME_INCLUDE_LOAN = 'home_include_loan';
+
 const HomeScreen = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation<BottomTabNavigationProp<BottomTabParamList, 'Home'>>();
@@ -23,13 +26,40 @@ const HomeScreen = () => {
   const { getAndClearNeedsRefresh } = useHomeDataChanged();
 
   const { funds, refresh: refreshFunds, isLoading: fundsLoading } = useFunds();
+  const [includeLoanInTotals, setIncludeLoanInTotals] = useState(false);
+
+  // Load persisted toggle on mount.
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem(STORAGE_KEY_HOME_INCLUDE_LOAN)
+      .then((v) => {
+        if (!cancelled && v === 'true') setIncludeLoanInTotals(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleIncludeLoanInTotals = useCallback(() => {
+    setIncludeLoanInTotals((prev) => {
+      const next = !prev;
+      AsyncStorage.setItem(
+        STORAGE_KEY_HOME_INCLUDE_LOAN,
+        next ? 'true' : 'false',
+      ).catch(() => {});
+      return next;
+    });
+  }, []);
+
   const {
     totalIncome,
     totalExpense,
+    expenseExcludingLoan,
     expenseByCategory,
     isLoading: monthLoading,
     refresh: refreshMonth,
-  } = useMonthTransactions();
+  } = useMonthTransactions(includeLoanInTotals);
   const { totalsByDirection } = useDebts();
   const hasDebtsActivity = totalsByDirection.lent > 0 || totalsByDirection.borrowed > 0;
 
@@ -179,6 +209,8 @@ const HomeScreen = () => {
               totalExpense={totalExpense}
               hideBalance={hideBalance}
               onToggleHideBalance={toggleHideBalance}
+              includeLoanInTotals={includeLoanInTotals}
+              onToggleIncludeLoanInTotals={toggleIncludeLoanInTotals}
               onQuickAdd={onQuickAdd}
               onViewDetailStats={onViewDetailStats}
               onManageFund={onManageFund}
@@ -214,7 +246,7 @@ const HomeScreen = () => {
             <View style={styles.sectionBlock}>
               <SpendingDistributionSection
                 expenseByCategory={expenseByCategory}
-                totalExpense={totalExpense}
+                totalExpense={expenseExcludingLoan}
                 onPressDetail={onViewDetailStats}
                 onPressCategory={onCategoryDetail}
               />

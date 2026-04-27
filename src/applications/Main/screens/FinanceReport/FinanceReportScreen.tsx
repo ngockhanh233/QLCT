@@ -12,7 +12,6 @@ import {
   ScrollView,
   RefreshControl,
   TouchableOpacity,
-  Switch,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,7 +42,7 @@ import IncomeIcon from '../../../../assets/icons/IncomeIcon';
 import ExpenseIcon from '../../../../assets/icons/ExpenseIcon';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../MainScreen';
-import { MonthPicker, ErrorPopup } from '../../../../components';
+import { MonthPicker, ErrorPopup, AppSwitch } from '../../../../components';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 
 const COLLECTION_NAME = 'transactions';
@@ -737,14 +736,9 @@ const FinanceReportScreen: React.FC = () => {
               Cộng dồn các giao dịch vay/nợ vào tổng thu chi và biểu đồ.
             </Text>
           </View>
-          <Switch
+          <AppSwitch
             value={includeLoanInStats}
             onValueChange={toggleIncludeLoanInStats}
-            thumbColor={colors.white}
-            trackColor={{
-              false: colors.backgroundSecondary,
-              true: colors.primary,
-            }}
           />
         </View>
 

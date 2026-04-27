@@ -16,6 +16,8 @@ import {
   LuckyMoneyInIcon,
   CongratsMoneyIcon,
   PrizeIcon,
+  HusbandIcon,
+  WifeIcon,
 } from '../assets/icons/categories';
 
 export interface IconProps {
@@ -148,6 +150,18 @@ export const INCOME_CATEGORIES: IncomeCategory[] = [
     color: '#4CAF50',
   },
   {
+    id: 'wife_in',
+    name: 'Vợ',
+    icon: WifeIcon,
+    color: '#EC407A',
+  },
+  {
+    id: 'husband_in',
+    name: 'Chồng',
+    icon: HusbandIcon,
+    color: '#1976D2',
+  },
+  {
     id: 'other_income',
     name: 'Khác',
     icon: OtherIncomeIcon,
@@ -174,6 +188,8 @@ export const getIncomeCategoriesByGroup = () => {
         'hieu_hi_in',
         'prize',
         'rental',
+        'wife_in',
+        'husband_in',
         'other_income',
       ].includes(c.id),
     ),

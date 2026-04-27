@@ -8,6 +8,14 @@ import {
   FundProfileIcon,
   FundCalendarIcon,
   FundBellIcon,
+  FundPlaneIcon,
+  FundHeartIcon,
+  FundShieldIcon,
+  FundChartIcon,
+  FundGiftIcon,
+  FundGraduationIcon,
+  FundHealthIcon,
+  FundMotorbikeIcon,
 } from '../assets/icons/funds/index';
 import { FuelIcon, TransportIcon } from '../assets/icons/categories';
 
@@ -28,15 +36,22 @@ export interface FundIconDef {
 export const FUND_ICON_OPTIONS: FundIconDef[] = [
   { id: 'piggy', name: 'Heo tiết kiệm', icon: FundPiggyBankIcon },
   { id: 'wallet', name: 'Ví', icon: FundWalletIcon },
-  { id: 'fuel', name: 'Xăng', icon: FuelIcon },
-  { id: 'transport', name: 'Xe', icon: TransportIcon },
   { id: 'money', name: 'Tiền', icon: FundMoneyIcon },
   { id: 'budget', name: 'Ngân sách', icon: FundBudgetIcon },
   { id: 'home', name: 'Nhà', icon: FundHomeIcon },
+  // { id: 'transport', name: 'Xe', icon: TransportIcon },
+  // { id: 'fuel', name: 'Xăng', icon: FuelIcon },
+  { id: 'motorbike', name: 'Xe máy', icon: FundMotorbikeIcon },
+  { id: 'plane', name: 'Du lịch', icon: FundPlaneIcon },
+  { id: 'graduation', name: 'Học hành', icon: FundGraduationIcon },
+  { id: 'heart', name: 'Cưới hỏi', icon: FundHeartIcon },
+  { id: 'health', name: 'Y tế', icon: FundHealthIcon },
+  { id: 'shield', name: 'Khẩn cấp', icon: FundShieldIcon },
+  { id: 'chart', name: 'Đầu tư', icon: FundChartIcon },
+  { id: 'gift', name: 'Quà tặng', icon: FundGiftIcon },
   { id: 'profile', name: 'Hồ sơ', icon: FundProfileIcon },
   { id: 'calendar', name: 'Lịch', icon: FundCalendarIcon },
-  { id: 'bell', name: 'Chuông', icon: FundBellIcon },
-  
+  // { id: 'bell', name: 'Chuông', icon: FundBellIcon },
 ];
 
 export const DEFAULT_FUND_ICON_ID = 'piggy';

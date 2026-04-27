@@ -1,4 +1,5 @@
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import AppSwitch from '../../../../../../components/AppSwitch/AppSwitch';
 import LinearGradient from 'react-native-linear-gradient';
 import { useNavigation } from '@react-navigation/native';
 import { colors } from '../../../../../../utils/color';
@@ -33,6 +34,8 @@ interface HeaderSectionProps {
   totalExpense: number;
   hideBalance?: boolean;
   onToggleHideBalance?: () => void;
+  includeLoanInTotals?: boolean;
+  onToggleIncludeLoanInTotals?: () => void;
   onQuickAdd?: () => void;
   onViewDetailStats?: () => void;
   onManageFund?: () => void;
@@ -48,6 +51,8 @@ const HeaderSection = ({
   totalExpense,
   hideBalance = false,
   onToggleHideBalance,
+  includeLoanInTotals = false,
+  onToggleIncludeLoanInTotals,
   onQuickAdd,
   onViewDetailStats,
   onManageFund,
@@ -178,6 +183,17 @@ const HeaderSection = ({
               {hideBalance ? MASKED_VALUE : formatMoney(totalExpense)}
             </Text>
           </View>
+        </View>
+
+        <View style={styles.includeLoanRow}>
+          <Text style={styles.includeLoanLabel}>Tính cả vay/nợ</Text>
+          <AppSwitch
+            value={includeLoanInTotals}
+            onValueChange={onToggleIncludeLoanInTotals}
+            size="sm"
+            activeColor="rgba(255,255,255,0.55)"
+            inactiveColor="rgba(255,255,255,0.25)"
+          />
         </View>
       </View>
     </LinearGradient>
@@ -390,6 +406,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  includeLoanRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  includeLoanLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.9)',
+    letterSpacing: 0.3,
+  },
+  includeLoanSwitch: {
+    transform: [{ scaleX: 0.8 }, { scaleY: 0.8 }],
   },
   actionsRow: {
     flexDirection: 'row',

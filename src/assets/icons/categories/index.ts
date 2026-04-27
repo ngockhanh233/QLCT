@@ -57,3 +57,8 @@ export { default as RepairIcon } from './RepairIcon';
 export { default as BeautyIcon } from './BeautyIcon';
 export { default as HieuHiIcon } from './HieuHiIcon';
 export { default as LuckyMoneyOutIcon } from './LuckyMoneyOutIcon';
+
+// Family — dùng chung cho cả Thu và Chi.
+export { default as HusbandIcon } from './HusbandIcon';
+export { default as WifeIcon } from './WifeIcon';
+export { default as BankIcon } from './BankIcon';

@@ -7,7 +7,6 @@ import {
   ScrollView,
   TextInput,
   ActivityIndicator,
-  Switch,
   RefreshControl,
 } from 'react-native';
 import Modal from 'react-native-modal';
@@ -20,7 +19,7 @@ import WalletIcon from '../../../../assets/icons/WalletIcon';
 import CheckIcon from '../../../../assets/icons/CheckIcon';
 import ClockIcon from '../../../../assets/icons/ClockIcon';
 import { showSnackbar } from '../../../../utils/snackbar';
-import { CurrencyInput, SwipeableRow, DatePicker, FundPicker } from '../../../../components';
+import { CurrencyInput, SwipeableRow, DatePicker, FundPicker, ErrorPopup, AppSwitch } from '../../../../components';
 import EditNoteDateModal from './components/EditNoteDateModal';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
@@ -95,6 +94,13 @@ const DebtsScreen: React.FC = () => {
 
   // Edit debt modal
   const [editDebtTarget, setEditDebtTarget] = useState<DebtRecord | null>(null);
+
+  // Error popup
+  const [errorPopup, setErrorPopup] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+  }>({ visible: false, title: 'Lỗi', message: '' });
 
   const fundsDefaultFirst = useMemo(() => {
     return [...funds].sort((a, b) => {
@@ -176,7 +182,13 @@ const DebtsScreen: React.FC = () => {
     const remaining = debtRemaining(debt);
     setRepayDebt(debt);
     setRepayAmount(remaining);
-    setRepayFundId(debt.fundId || defaultFund?.id || fundsDefaultFirst[0]?.id || '');
+    const originalExists =
+      !!debt.fundId && funds.some((f) => f.id === debt.fundId);
+    setRepayFundId(
+      originalExists
+        ? debt.fundId!
+        : defaultFund?.id || fundsDefaultFirst[0]?.id || '',
+    );
     setRepayDate(new Date());
     setRepayNote('');
     setRepayVisible(true);
@@ -198,6 +210,20 @@ const DebtsScreen: React.FC = () => {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
+    const remaining = debtRemaining(repayDebt);
+    if (repayAmount > remaining) {
+      const isLent = repayDebt.direction === 'lent';
+      setErrorPopup({
+        visible: true,
+        title: isLent ? 'Số tiền thu vượt quá' : 'Số tiền trả vượt quá',
+        message: `Số tiền nhập (${repayAmount.toLocaleString(
+          'vi-VN',
+        )}đ) vượt quá số ${isLent ? 'còn phải thu' : 'còn phải trả'} (${remaining.toLocaleString(
+          'vi-VN',
+        )}đ).`,
+      });
+      return;
+    }
     setIsRepaying(true);
     try {
       await addRepayment(repayDebt.id, {
@@ -211,7 +237,7 @@ const DebtsScreen: React.FC = () => {
       showSnackbar({ type: 'success', message: 'Đã ghi nhận' });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Không thể ghi nhận';
-      showSnackbar({ type: 'error', message: msg });
+      setErrorPopup({ visible: true, title: 'Lỗi', message: msg });
     } finally {
       setIsRepaying(false);
     }
@@ -219,7 +245,14 @@ const DebtsScreen: React.FC = () => {
 
   const openDeleteDebt = (debt: DebtRecord) => {
     setDeleteDebtTarget(debt);
-    setDeleteDebtFundId(debt.fundId || defaultFund?.id || fundsDefaultFirst[0]?.id || '');
+    // Fallback nếu quỹ gốc đã bị xóa.
+    const originalExists =
+      !!debt.fundId && funds.some((f) => f.id === debt.fundId);
+    setDeleteDebtFundId(
+      originalExists
+        ? debt.fundId!
+        : defaultFund?.id || fundsDefaultFirst[0]?.id || '',
+    );
     setDeleteDebtOffsetId('');
   };
 
@@ -359,7 +392,7 @@ const DebtsScreen: React.FC = () => {
             )}
 
             <View style={styles.metaRow}>
-              {fund && (
+              {fund ? (
                 <View style={styles.metaItem}>
                   {(() => {
                     const FundIcon = getFundIconComponent(fund.icon);
@@ -370,7 +403,11 @@ const DebtsScreen: React.FC = () => {
                     {fund.name}
                   </Text>
                 </View>
-              )}
+              ) : debt.fundId ? (
+                <Text style={styles.metaTextDeleted} numberOfLines={1}>
+                  Quỹ đã bị xóa
+                </Text>
+              ) : null}
               <Text style={styles.metaText}>
                 {debt.startDate.toLocaleDateString('vi-VN')}
               </Text>
@@ -645,14 +682,9 @@ const DebtsScreen: React.FC = () => {
 
             <View style={styles.dueRow}>
               <Text style={styles.inputLabel}>Hạn trả</Text>
-              <Switch
+              <AppSwitch
                 value={formDueEnabled}
                 onValueChange={setFormDueEnabled}
-                thumbColor={colors.white}
-                trackColor={{
-                  false: colors.backgroundSecondary,
-                  true: colors.primary,
-                }}
               />
             </View>
             {formDueEnabled && (
@@ -956,6 +988,13 @@ const DebtsScreen: React.FC = () => {
         }}
         successMessage="Đã cập nhật khoản nợ"
       />
+
+      <ErrorPopup
+        visible={errorPopup.visible}
+        title={errorPopup.title}
+        message={errorPopup.message}
+        onClose={() => setErrorPopup((s) => ({ ...s, visible: false }))}
+      />
     </View>
   );
 };
@@ -1108,6 +1147,7 @@ const styles = StyleSheet.create({
   metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   metaText: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
   metaTextDue: { fontSize: 11, fontWeight: '700', color: colors.error },
+  metaTextDeleted: { fontSize: 11, fontWeight: '700', color: colors.error, fontStyle: 'italic' },
   repayCount: { fontSize: 11, fontWeight: '600', color: colors.primary },
   cardNote: { fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' },
   dueStatusRow: {

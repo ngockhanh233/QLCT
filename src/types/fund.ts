@@ -6,6 +6,8 @@ export interface FundRecord {
   color?: string;
   icon?: string | null;
   isDefault?: boolean;
+  /** Mục tiêu tiết kiệm (tùy chọn). */
+  goalAmount?: number | null;
   createdAt?: Date;
   updatedAt?: Date;
 }

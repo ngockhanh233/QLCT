@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   ScrollView,
   TextInput,
-  Switch,
   ActivityIndicator,
   BackHandler,
 } from 'react-native';
@@ -24,7 +23,7 @@ import {
   increment,
 } from '@react-native-firebase/firestore';
 import { colors } from '../../../../utils/color';
-import { DatePicker, TimePicker, CurrencyInput, CategoryPicker, FundPicker } from '../../../../components';
+import { DatePicker, TimePicker, CurrencyInput, CategoryPicker, FundPicker, AppSwitch } from '../../../../components';
 import { EXPENDITURE_CATEGORIES } from '../../../../constants/ExpenditureCategoryConstants';
 import { INCOME_CATEGORIES } from '../../../../constants/IncomeCategoryConstants';
 import { getStoredUser, pushBalanceNotification } from '../../../../services';
@@ -835,7 +834,7 @@ const AddTransactionScreen: React.FC = () => {
         {!isEditMode && transactionType === 'income' && funds.length > 1 && (
           <View style={styles.splitToggleRow}>
             <Text style={styles.splitToggleText}>Chia thu nhập theo quỹ</Text>
-            <Switch
+            <AppSwitch
               value={splitIncomeEnabled}
               onValueChange={(value) => {
                 setSplitIncomeEnabled(value);
@@ -847,7 +846,6 @@ const AddTransactionScreen: React.FC = () => {
                     fundsDefaultFirst[0]?.id ||
                     '';
                   setIncomeSplits([{ id, fundId: initialFundId, amount }]);
-                  // Mặc định ẩn danh sách quỹ, chỉ mở khi user bấm vào item.
                   setActiveSplitId('');
                   setSelectedIncomePresetId('');
                 } else {
@@ -857,11 +855,6 @@ const AddTransactionScreen: React.FC = () => {
                   setActiveSplitId('');
                   setSelectedIncomePresetId('');
                 }
-              }}
-              thumbColor={splitIncomeEnabled ? colors.white : colors.white}
-              trackColor={{
-                false: colors.backgroundSecondary,
-                true: colors.primary,
               }}
             />
           </View>

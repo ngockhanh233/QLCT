@@ -8,7 +8,6 @@ import {
   RefreshControl,
   ActivityIndicator,
   ScrollView,
-  Switch,
   Animated,
   Pressable,
   type LayoutChangeEvent,
@@ -27,11 +26,12 @@ import {
   type TransactionTimeFilter,
 } from './hooks/useTransactions';
 import CalendarIcon from '../../../../assets/icons/CalendarIcon';
-import { Skeleton, SwipeableRow, ErrorPopup, FundPicker } from '../../../../components';
+import { Skeleton, SwipeableRow, ErrorPopup, FundPicker, AppSwitch } from '../../../../components';
 import { useHomeDataChanged } from '../../../../contexts/HomeDataChangedContext';
 import type { RootStackParamList } from '../../MainScreen';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
+import ChevronDownIcon from '../../../../assets/icons/ChevronDownIcon';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import Svg, { Path } from 'react-native-svg';
 import TransactionFilterPanel from './components/TransactionFilterPanel';
@@ -58,7 +58,11 @@ interface LoanGroupData {
   direction: 'lent' | 'borrowed';
   principal: number;
   remaining: number;
+  /** Children thuộc về ngày hiển thị card này (có thể chỉ là subset nếu debt có
+   *  giao dịch ở các ngày khác). */
   children: LoanGroupChild[];
+  /** Số giao dịch của cùng debt nhưng nằm ở các ngày khác, hiển thị "+N giao dịch khác". */
+  otherCount: number;
 }
 
 interface TransactionViewItem {
@@ -240,11 +244,13 @@ const TransactionScreen: React.FC = () => {
   const [splitRefundFundId, setSplitRefundFundId] = useState<string>('');
   const [isFilterCollapsed, setIsFilterCollapsed] = useState(false);
   const [showFilterToggle, setShowFilterToggle] = useState(false);
+  const [showScrollTop, setShowScrollTop] = useState(false);
   const [floatingFilterVisible, setFloatingFilterVisible] = useState(false);
   /** Chiều cao thật của bộ lọc — tránh khung 340px tạo khoảng trắng lớn */
   const [filterPanelHeight, setFilterPanelHeight] = useState(FILTER_PANEL_HEIGHT_FALLBACK);
   const filterCollapsedRef = useRef<boolean>(false);
   const showFilterToggleRef = useRef<boolean>(false);
+  const showScrollTopRef = useRef<boolean>(false);
   const listRef = useRef<FlatList<TransactionGroup> | null>(null);
   const filterScrollY = useRef(new Animated.Value(0)).current;
   /** Offset list hiện tại — tránh đổi chiều cao filter khi đang lướt (gây giật) */
@@ -458,6 +464,13 @@ const TransactionScreen: React.FC = () => {
         showFilterToggleRef.current = nextShowToggle;
         setShowFilterToggle(nextShowToggle);
       }
+
+      // Hiện FAB cuộn lên khi user đã cuộn qua khỏi header.
+      const nextShowScrollTop = value >= 240;
+      if (nextShowScrollTop !== showScrollTopRef.current) {
+        showScrollTopRef.current = nextShowScrollTop;
+        setShowScrollTop(nextShowScrollTop);
+      }
     });
     return () => filterScrollY.removeListener(id);
   }, [filterScrollY]);
@@ -558,17 +571,14 @@ const TransactionScreen: React.FC = () => {
       else loanGroupMap.set(key, [tx]);
     }
 
-    const loanGroupItems: TransactionViewItem[] = Array.from(
-      loanGroupMap.entries(),
-    ).map(([groupKey, txs]) => {
-      const sortedTxs = [...txs].sort(
-        (a, b) => b.transactionDate.getTime() - a.transactionDate.getTime(),
-      );
-      const latestTx = sortedTxs[0];
+    // Tạo 1 card cho mỗi (debt, dateLabel) — card chỉ hiển thị giao dịch con của
+    // ngày đó; những lần trả/thu của các ngày khác thể hiện dưới dạng "+N giao dịch khác".
+    const loanGroupItems: TransactionViewItem[] = [];
+    for (const [groupKey, txs] of loanGroupMap.entries()) {
       const debtId = groupKey.startsWith('__orphan_') ? '' : groupKey;
       const debt = debtId ? debtById.get(debtId) : undefined;
 
-      const children: LoanGroupChild[] = sortedTxs.map(t => ({
+      const allChildren: LoanGroupChild[] = txs.map(t => ({
         id: t.id,
         amount: t.amount,
         type: t.type,
@@ -580,31 +590,47 @@ const TransactionScreen: React.FC = () => {
         note: t.note ?? '',
       }));
 
-      return {
-        id: `loan_group_${groupKey}`,
-        categoryId: 'loan_group',
-        amount: 0,
-        type: 'income',
-        note: '',
-        fundId: null,
-        isSplitIncome: false,
-        incomeSplits: null,
-        dateLabel: formatDateLabel(latestTx.transactionDate),
-        timeLabel: formatTimeLabel(latestTx.transactionDate),
-        rawDate: latestTx.transactionDate,
-        isLoanMovement: false,
-        debtId: null,
-        isLoanGroup: true,
-        loanGroupData: {
-          debtId,
-          counterparty: debt?.counterparty ?? 'Khoản vay',
-          direction: debt?.direction ?? 'lent',
-          principal: debt?.principal ?? 0,
-          remaining: debt ? debtRemaining(debt) : 0,
-          children,
-        },
-      };
-    });
+      // Group children theo dateLabel.
+      const childrenByDate = new Map<string, LoanGroupChild[]>();
+      for (const c of allChildren) {
+        const arr = childrenByDate.get(c.dateLabel);
+        if (arr) arr.push(c);
+        else childrenByDate.set(c.dateLabel, [c]);
+      }
+
+      for (const [dateLabel, dateChildren] of childrenByDate) {
+        const sortedDateChildren = [...dateChildren].sort(
+          (a, b) => b.rawDate.getTime() - a.rawDate.getTime(),
+        );
+        const latestOnDate = sortedDateChildren[0];
+        const otherCount = allChildren.length - dateChildren.length;
+        loanGroupItems.push({
+          id: `loan_group_${groupKey}_${dateLabel}`,
+          categoryId: 'loan_group',
+          amount: 0,
+          type: 'income',
+          note: '',
+          fundId: null,
+          isSplitIncome: false,
+          incomeSplits: null,
+          dateLabel,
+          timeLabel: latestOnDate.timeLabel,
+          rawDate: latestOnDate.rawDate,
+          isLoanMovement: false,
+          debtId: null,
+          isLoanGroup: true,
+          loanGroupData: {
+            debtId,
+            counterparty: debt?.counterparty ?? 'Khoản vay',
+            direction: debt?.direction ?? 'lent',
+            principal: debt?.principal ?? 0,
+            remaining: debt ? debtRemaining(debt) : 0,
+            children: sortedDateChildren,
+            otherCount,
+          },
+        });
+      }
+    }
 
     const all = [...regularItems, ...loanGroupItems];
     all.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
@@ -651,24 +677,35 @@ const TransactionScreen: React.FC = () => {
 
   const groupedByDate: TransactionGroup[] = useMemo(() => {
     const groups: { [key: string]: TransactionViewItem[] } = {};
+    const loanNetByDate: { [key: string]: number } = {};
 
     viewItems.forEach(t => {
       if (!groups[t.dateLabel]) {
         groups[t.dateLabel] = [];
       }
       groups[t.dateLabel].push(t);
+
+      // Khi bật toggle vay nợ: cộng dồn từng child theo dateLabel thực tế của
+      // child (vì loan group card gộp theo debt, chỉ hiện ở 1 ngày của child mới nhất).
+      if (showLoanInList && t.isLoanGroup && t.loanGroupData) {
+        t.loanGroupData.children.forEach(c => {
+          const delta = c.type === 'expense' ? -c.amount : c.amount;
+          loanNetByDate[c.dateLabel] = (loanNetByDate[c.dateLabel] ?? 0) + delta;
+        });
+      }
     });
 
     return Object.entries(groups).map(([date, items]) => ({
       date,
       transactions: items,
-      // Daily total loại loan group (card gộp không phải luồng tiền thực của ngày).
-      total: items.reduce((sum, t) => {
-        if (t.isLoanGroup) return sum;
-        return sum + (t.type === 'expense' ? -t.amount : t.amount);
-      }, 0),
+      // Daily total: tx thường + loan children theo ngày khi toggle bật.
+      total:
+        items.reduce((sum, t) => {
+          if (t.isLoanGroup) return sum;
+          return sum + (t.type === 'expense' ? -t.amount : t.amount);
+        }, 0) + (loanNetByDate[date] ?? 0),
     }));
-  }, [viewItems]);
+  }, [viewItems, showLoanInList]);
 
 
   const renderLoanTransactionItem = (item: TransactionViewItem) => {
@@ -835,12 +872,16 @@ const TransactionScreen: React.FC = () => {
         borderRadius={14}
         buttonWidth={70}
       >
-      <TouchableOpacity
-        style={styles.loanGroupCard}
-        onPress={openDetail}
-        activeOpacity={0.8}
-        disabled={!data.debtId}
-      >
+      <View style={styles.loanGroupCardOuter}>
+        <View
+          style={[styles.loanGroupAccentBar, { backgroundColor: accentColor }]}
+        />
+        <TouchableOpacity
+          style={styles.loanGroupCard}
+          onPress={openDetail}
+          activeOpacity={0.8}
+          disabled={!data.debtId}
+        >
         <View style={styles.loanGroupHeader}>
           <View style={[styles.loanGroupIcon, { backgroundColor: accentColor + '18' }]}>
             <WalletIcon width={22} height={22} color={accentColor} />
@@ -891,13 +932,18 @@ const TransactionScreen: React.FC = () => {
         </View>
 
         {data.principal > 0 && (
-          <View style={styles.loanGroupProgressTrack}>
-            <View
-              style={[
-                styles.loanGroupProgressFill,
-                { width: `${pct}%`, backgroundColor: accentColor },
-              ]}
-            />
+          <View style={styles.loanGroupProgressRow}>
+            <View style={styles.loanGroupProgressTrack}>
+              <View
+                style={[
+                  styles.loanGroupProgressFill,
+                  { width: `${pct}%`, backgroundColor: accentColor },
+                ]}
+              />
+            </View>
+            <Text style={[styles.loanGroupProgressLabel, { color: accentColor }]}>
+              {Math.round(pct)}%
+            </Text>
           </View>
         )}
 
@@ -912,6 +958,7 @@ const TransactionScreen: React.FC = () => {
                 child.fundId && fundNameById.has(child.fundId)
                   ? (fundNameById.get(child.fundId) as string)
                   : null;
+              const fundDeleted = !!child.fundId && !fundNameById.has(child.fundId);
               return (
                 <View key={child.id} style={styles.loanGroupChildRow}>
                   <View style={styles.loanGroupChildLeft}>
@@ -928,11 +975,15 @@ const TransactionScreen: React.FC = () => {
                           {child.dateLabel} • {child.timeLabel}
                         </Text>
                       </View>
-                      {fundName && (
+                      {fundName ? (
                         <Text style={styles.loanGroupChildFund} numberOfLines={1}>
                           Quỹ: {fundName}
                         </Text>
-                      )}
+                      ) : fundDeleted ? (
+                        <Text style={styles.loanGroupChildFundDeleted} numberOfLines={1}>
+                          Quỹ: Quỹ đã bị xóa
+                        </Text>
+                      ) : null}
                       {child.note ? (
                         <Text
                           style={styles.loanGroupChildNote}
@@ -950,9 +1001,19 @@ const TransactionScreen: React.FC = () => {
                 </View>
               );
             })}
+            {data.otherCount > 0 && (
+              <View style={styles.loanGroupOtherCountWrap}>
+                <View style={styles.loanGroupOtherCountChip}>
+                  <Text style={styles.loanGroupOtherCountText}>
+                    + {data.otherCount} giao dịch khác
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </View>
       </SwipeableRow>
     );
   };
@@ -1051,6 +1112,8 @@ const TransactionScreen: React.FC = () => {
       setDeleteModalVisible(true);
     };
 
+    const accentColor = item.type === 'income' ? colors.success : colors.error;
+
     return (
       <SwipeableRow
         onEdit={handleEdit}
@@ -1058,7 +1121,11 @@ const TransactionScreen: React.FC = () => {
         borderRadius={14}
 
       >
-        <TouchableOpacity style={styles.transactionItem} activeOpacity={0.7}>
+        <View style={styles.transactionItem}>
+          <View
+            style={[styles.transactionAccentBar, { backgroundColor: accentColor }]}
+          />
+          <TouchableOpacity style={styles.transactionItemInner} activeOpacity={0.7}>
           <View style={[styles.transactionIcon, { backgroundColor: category.color + '15' }]}>
             <IconComponent width={22} height={22} color={category.color} />
           </View>
@@ -1107,7 +1174,8 @@ const TransactionScreen: React.FC = () => {
             </Text>
             <Text style={styles.transactionTime}>{item.timeLabel}</Text>
           </View>
-        </TouchableOpacity>
+          </TouchableOpacity>
+        </View>
       </SwipeableRow>
     );
   };
@@ -1125,6 +1193,137 @@ const TransactionScreen: React.FC = () => {
           {renderTransactionItem({ item: transaction })}
         </View>
       ))}
+    </View>
+  );
+
+  // Loan direction chip + Summary card — đặt cùng filter để cuộn lên là cùng ẩn,
+  // và tái sử dụng trong popup filter.
+  const headerExtras = (
+    <>
+      {mainTab === 'debts' && (
+        <View style={styles.loanDirectionRow}>
+          {(
+            [
+              { key: 'all', label: 'Tất cả' },
+              { key: 'lent', label: 'Cho vay' },
+              { key: 'borrowed', label: 'Đi vay' },
+            ] as { key: LoanDirectionFilter; label: string }[]
+          ).map((opt) => {
+            const isActive = loanDirectionFilter === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[
+                  styles.loanDirectionChip,
+                  isActive && styles.loanDirectionChipActive,
+                ]}
+                onPress={() => setLoanDirectionFilter(opt.key)}
+                activeOpacity={0.7}
+              >
+                <Text
+                  style={[
+                    styles.loanDirectionChipText,
+                    isActive && styles.loanDirectionChipTextActive,
+                  ]}
+                >
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
+      <View style={styles.summaryRow}>
+        <View style={styles.summaryCard}>
+          <View style={[styles.summaryItem, styles.summaryItemExpense]}>
+            <View style={styles.summaryTitleRow}>
+              <View
+                style={[styles.summaryIconCircle, { borderColor: colors.error }]}
+              >
+                <Text style={[styles.summaryIconText, { color: colors.error }]}>
+                  -
+                </Text>
+              </View>
+              <Text style={styles.summaryLabel}>
+                {mainTab === 'debts' ? 'Cho vay / Trả nợ' : 'Khoản chi'}
+              </Text>
+            </View>
+            <Text style={[styles.summaryAmount, { color: colors.error }]}>
+              {totalExpense.toLocaleString('vi-VN')}đ
+            </Text>
+          </View>
+
+          <View style={styles.summaryDivider} />
+
+          <View style={[styles.summaryItem, styles.summaryItemIncome]}>
+            <View style={styles.summaryTitleRow}>
+              <View
+                style={[styles.summaryIconCircle, { borderColor: colors.success }]}
+              >
+                <Text style={[styles.summaryIconText, { color: colors.success }]}>
+                  +
+                </Text>
+              </View>
+              <Text style={styles.summaryLabel}>
+                {mainTab === 'debts' ? 'Đi vay / Thu nợ' : 'Khoản thu'}
+              </Text>
+            </View>
+            <Text style={[styles.summaryAmount, { color: colors.success }]}>
+              {totalIncome.toLocaleString('vi-VN')}đ
+            </Text>
+          </View>
+          <View style={styles.netInlineDivider} />
+          <View style={styles.netInlineRow}>
+            <Text style={styles.netLabel}>NET</Text>
+            <Text
+              style={[
+                styles.netAmount,
+                netAmount >= 0
+                  ? { color: colors.success }
+                  : { color: colors.error },
+              ]}
+            >
+              {netAmount >= 0 ? '+' : '-'}
+              {Math.abs(netAmount).toLocaleString('vi-VN')}đ
+            </Text>
+          </View>
+        </View>
+      </View>
+    </>
+  );
+
+  // Inline filter + headerExtras dùng làm ListHeaderComponent của FlatList
+  // → cuộn theo danh sách, không sticky/fade.
+  // Filter dùng marginHorizontal âm để bù `listContainer.paddingHorizontal: 20`,
+  // giúp filter chiếm full chiều ngang. Summary giữ nguyên inset.
+  const listHeader = (
+    <View>
+      <View style={styles.listHeaderFilterFullWidth}>
+        <TransactionFilterPanel
+          timeFilters={TIME_FILTERS}
+          typeFilters={mainTab === 'debts' ? [] : TYPE_FILTERS}
+          activeFilter={activeFilter}
+          typeFilter={typeFilter}
+          dateFilterMode={dateFilterMode}
+          fromDate={fromDate}
+          toDate={toDate}
+          onChangeTimeFilter={handleSelectTimeFilter}
+          onChangeTypeFilter={setTypeFilter}
+          onSingleDateChange={(date: Date) => {
+            setFromDate(date);
+            setDateFilterMode('single');
+            setIsCustomDate(true);
+          }}
+          onFromDateChange={handleFromDateChange}
+          onToDateChange={handleToDateChange}
+          onResetFilters={handleResetFilters}
+          loanToggleVisible={mainTab === 'transactions'}
+          showLoan={showLoanInList}
+          onShowLoanChange={setShowLoanInListPersisted}
+        />
+      </View>
+      {headerExtras}
     </View>
   );
 
@@ -1786,14 +1985,9 @@ const TransactionScreen: React.FC = () => {
                     ? 'Hoàn tiền về quỹ'
                     : 'Trừ tiền vào quỹ'}
                 </Text>
-                <Switch
+                <AppSwitch
                   value={deleteAffectFundsEnabled}
                   onValueChange={setDeleteAffectFundsEnabled}
-                  thumbColor={deleteAffectFundsEnabled ? colors.white : colors.white}
-                  trackColor={{
-                    false: colors.backgroundSecondary,
-                    true: colors.primary,
-                  }}
                 />
               </View>
 
@@ -2029,43 +2223,6 @@ const TransactionScreen: React.FC = () => {
         </View>
       </Modal>
 
-      <Animated.View style={[styles.filterClipOuter, filterClipLayoutStyle]}>
-        <Animated.View
-          style={[
-            styles.filterAnimatedContainer,
-            filterInnerAnimatedStyle,
-            filterInnerScrollLiftStyle,
-          ]}
-          pointerEvents={isFilterCollapsed ? 'none' : 'auto'}
-          renderToHardwareTextureAndroid
-        >
-        <View onLayout={onFilterPanelLayout}>
-        <TransactionFilterPanel
-          timeFilters={TIME_FILTERS}
-          typeFilters={mainTab === 'debts' ? [] : TYPE_FILTERS}
-          activeFilter={activeFilter}
-          typeFilter={typeFilter}
-          dateFilterMode={dateFilterMode}
-          fromDate={fromDate}
-          toDate={toDate}
-          onChangeTimeFilter={handleSelectTimeFilter}
-          onChangeTypeFilter={setTypeFilter}
-          onSingleDateChange={(date: Date) => {
-            setFromDate(date);
-            setDateFilterMode('single');
-            setIsCustomDate(true);
-          }}
-          onFromDateChange={handleFromDateChange}
-          onToDateChange={handleToDateChange}
-          onResetFilters={handleResetFilters}
-          loanToggleVisible={mainTab === 'transactions'}
-          showLoan={showLoanInList}
-          onShowLoanChange={setShowLoanInListPersisted}
-        />
-        </View>
-        </Animated.View>
-      </Animated.View>
-
       {floatingFilterVisible && (
         <View style={styles.floatingFilterWrap} pointerEvents="box-none">
           <Pressable
@@ -2095,104 +2252,17 @@ const TransactionScreen: React.FC = () => {
               showLoan={showLoanInList}
               onShowLoanChange={setShowLoanInListPersisted}
             />
+            {headerExtras}
           </View>
         </View>
       )}
 
-      <Animated.View style={[styles.belowFilterSection, belowFilterScrollLiftStyle]}>
-        {/* Chip filter hướng vay (chỉ tab Vay nợ) */}
-        {mainTab === 'debts' && (
-          <View style={styles.loanDirectionRow}>
-            {([
-              { key: 'all', label: 'Tất cả' },
-              { key: 'lent', label: 'Cho vay' },
-              { key: 'borrowed', label: 'Đi vay' },
-            ] as { key: LoanDirectionFilter; label: string }[]).map((opt) => {
-              const isActive = loanDirectionFilter === opt.key;
-              return (
-                <TouchableOpacity
-                  key={opt.key}
-                  style={[
-                    styles.loanDirectionChip,
-                    isActive && styles.loanDirectionChipActive,
-                  ]}
-                  onPress={() => setLoanDirectionFilter(opt.key)}
-                  activeOpacity={0.7}
-                >
-                  <Text
-                    style={[
-                      styles.loanDirectionChipText,
-                      isActive && styles.loanDirectionChipTextActive,
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
-
-        {/* Summary Card */}
-        <View style={styles.summaryRow}>
-          <View style={styles.summaryCard}>
-            <View style={[styles.summaryItem, styles.summaryItemExpense]}>
-              <View style={styles.summaryTitleRow}>
-                <View
-                  style={[styles.summaryIconCircle, { borderColor: colors.error }]}
-                >
-                  <Text style={[styles.summaryIconText, { color: colors.error }]}>
-                    -
-                  </Text>
-                </View>
-                <Text style={styles.summaryLabel}>
-                  {mainTab === 'debts' ? 'Cho vay / Trả nợ' : 'Khoản chi'}
-                </Text>
-              </View>
-              <Text style={[styles.summaryAmount, { color: colors.error }]}>
-                {totalExpense.toLocaleString('vi-VN')}đ
-              </Text>
-            </View>
-
-            <View style={styles.summaryDivider} />
-
-            <View style={[styles.summaryItem, styles.summaryItemIncome]}>
-              <View style={styles.summaryTitleRow}>
-                <View
-                  style={[styles.summaryIconCircle, { borderColor: colors.success }]}
-                >
-                  <Text style={[styles.summaryIconText, { color: colors.success }]}>
-                    +
-                  </Text>
-                </View>
-                <Text style={styles.summaryLabel}>
-                  {mainTab === 'debts' ? 'Đi vay / Thu nợ' : 'Khoản thu'}
-                </Text>
-              </View>
-              <Text style={[styles.summaryAmount, { color: colors.success }]}>
-                {totalIncome.toLocaleString('vi-VN')}đ
-              </Text>
-            </View>
-            <View style={styles.netInlineDivider} />
-            <View style={styles.netInlineRow}>
-              <Text style={styles.netLabel}>NET</Text>
-              <Text
-                style={[
-                  styles.netAmount,
-                  netAmount >= 0 ? { color: colors.success } : { color: colors.error },
-                ]}
-              >
-                {netAmount >= 0 ? '+' : '-'}
-                {Math.abs(netAmount).toLocaleString('vi-VN')}đ
-              </Text>
-            </View>
-          </View>
-        </View>
-
+      <View style={styles.belowFilterSection}>
         {/* Transaction List / Skeleton */}
         {((!isInitialized && transactions.length === 0) ||
           (isRefreshing && transactions.length === 0)) ? (
           <View style={styles.listContainer}>
+            {listHeader}
             {/* Skeleton groups */}
             {Array.from({ length: 3 }).map((_, idx) => (
               <View key={idx} style={styles.skeletonDateGroup}>
@@ -2235,6 +2305,7 @@ const TransactionScreen: React.FC = () => {
             refreshControl={
               <RefreshControl refreshing={isRefreshing} onRefresh={refresh} />
             }
+            ListHeaderComponent={listHeader}
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>Chưa có giao dịch nào</Text>
@@ -2242,7 +2313,21 @@ const TransactionScreen: React.FC = () => {
             }
           />
         )}
-      </Animated.View>
+      </View>
+
+      {showScrollTop && (
+        <TouchableOpacity
+          style={[styles.scrollTopFab, { bottom: insets.bottom + 20 }]}
+          activeOpacity={0.85}
+          onPress={() =>
+            listRef.current?.scrollToOffset({ offset: 0, animated: true })
+          }
+        >
+          <View style={styles.scrollTopFabIcon}>
+            <ChevronDownIcon width={18} height={18} color={colors.white} />
+          </View>
+        </TouchableOpacity>
+      )}
     </View>
   );
 };
@@ -2251,6 +2336,32 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.background,
+  },
+  scrollTopFab: {
+    position: 'absolute',
+    right: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: colors.primary + '66',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+    zIndex: 50,
+  },
+  scrollTopFabText: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 20,
+    marginTop: -1,
+  },
+  scrollTopFabIcon: {
+    transform: [{ rotate: '180deg' }],
   },
   /** Summary + list: flex để list chiếm phần còn lại; translateY theo scroll không dùng layout */
   belowFilterSection: {
@@ -2840,6 +2951,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingBottom: 100,
   },
+  listHeaderFilterFullWidth: {
+    marginHorizontal: -20,
+  },
   skeletonDateGroup: {
     marginBottom: 20,
   },
@@ -2888,8 +3002,21 @@ const styles = StyleSheet.create({
   },
   transactionItem: {
     flexDirection: 'row',
+    alignItems: 'stretch',
+    borderRadius: 14,
+    overflow: 'hidden',
+    backgroundColor: colors.white,
+  },
+  transactionItemInner: {
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'flex-start',
-    padding: 14,
+    paddingVertical: 14,
+    paddingRight: 14,
+    paddingLeft: 12,
+  },
+  transactionAccentBar: {
+    width: 4,
   },
   transactionIcon: {
     width: 46,
@@ -2922,16 +3049,26 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
-  loanGroupCard: {
-    backgroundColor: colors.white,
+  loanGroupCardOuter: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
     borderRadius: 14,
-    padding: 14,
+    overflow: 'hidden',
+    backgroundColor: colors.white,
     marginBottom: 10,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 4,
     elevation: 1,
+  },
+  loanGroupAccentBar: {
+    width: 4,
+  },
+  loanGroupCard: {
+    flex: 1,
+    padding: 14,
+    paddingLeft: 12,
   },
   loanGroupHeader: {
     flexDirection: 'row',
@@ -3010,16 +3147,28 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.text,
   },
-  loanGroupProgressTrack: {
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.backgroundSecondary,
-    overflow: 'hidden',
+  loanGroupProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
     marginTop: 10,
+  },
+  loanGroupProgressTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.inputBackground,
+    overflow: 'hidden',
   },
   loanGroupProgressFill: {
     height: '100%',
-    borderRadius: 2,
+    borderRadius: 4,
+  },
+  loanGroupProgressLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    minWidth: 36,
+    textAlign: 'right',
   },
   loanGroupChildren: {
     marginTop: 10,
@@ -3071,6 +3220,12 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontWeight: '500',
   },
+  loanGroupChildFundDeleted: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.error,
+    fontStyle: 'italic',
+  },
   loanGroupChildNote: {
     fontSize: 11,
     color: colors.textSecondary,
@@ -3079,6 +3234,21 @@ const styles = StyleSheet.create({
   loanGroupChildAmount: {
     fontSize: 13,
     fontWeight: '800',
+  },
+  loanGroupOtherCountWrap: {
+    marginTop: 8,
+    flexDirection: 'row',
+  },
+  loanGroupOtherCountChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#e2e2e2',
+  },
+  loanGroupOtherCountText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#4b4b4b',
   },
   // Delete debt modal styles
   debtDeleteModal: {

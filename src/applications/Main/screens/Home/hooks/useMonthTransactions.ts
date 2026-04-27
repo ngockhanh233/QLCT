@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApp } from '@react-native-firebase/app';
 import {
   getFirestore,
@@ -53,11 +53,21 @@ export interface ExpenseByCategory {
 export interface MonthSummary {
   totalIncome: number;
   totalExpense: number;
+  /** Tổng chi không bao gồm vay/nợ — dùng cho phần phân bố chi tiêu. */
+  expenseExcludingLoan: number;
   balance: number;
   expenseByCategory: ExpenseByCategory[];
 }
 
-async function fetchMonthSummary(userId: string): Promise<MonthSummary> {
+const EMPTY_SUMMARY: MonthSummary = {
+  totalIncome: 0,
+  totalExpense: 0,
+  expenseExcludingLoan: 0,
+  balance: 0,
+  expenseByCategory: [],
+};
+
+async function fetchMonthItems(userId: string): Promise<TransactionRecord[]> {
   const now = new Date();
   const start = startOfMonth(now);
   const end = endOfMonth(now);
@@ -71,9 +81,9 @@ async function fetchMonthSummary(userId: string): Promise<MonthSummary> {
   );
 
   const snapshot = await getDocs(q);
-  console.log('[Firestore] Home.fetchMonthSummary size=', snapshot.size);
+  console.log('[Firestore] Home.fetchMonthItems size=', snapshot.size);
 
-  const items: TransactionRecord[] = snapshot.docs.map((docSnap: QueryDoc) => {
+  return snapshot.docs.map((docSnap: QueryDoc) => {
     const data = docSnap.data() as Record<string, unknown>;
     const ts = data.transactionDate as
       | FirebaseFirestoreTypes.Timestamp
@@ -96,24 +106,32 @@ async function fetchMonthSummary(userId: string): Promise<MonthSummary> {
       isLoanMovement: data.isLoanMovement === true,
     };
   });
+}
 
-  // Loại các giao dịch vay/nợ khỏi thống kê thu/chi (coi là biến động tài sản, không phải income/expense).
-  const thisMonth = items.filter((t) => t.isLoanMovement !== true);
-
+function computeSummary(
+  items: TransactionRecord[],
+  includeLoan: boolean,
+): MonthSummary {
+  // Totals trên card có thể tính cả vay/nợ tùy toggle.
   let totalIncome = 0;
   let totalExpense = 0;
-  const categoryAmounts: Record<string, number> = {};
-
-  for (const t of thisMonth) {
-    if (t.type === 'income') {
-      totalIncome += t.amount;
-    } else {
-      totalExpense += t.amount;
-      categoryAmounts[t.categoryId] = (categoryAmounts[t.categoryId] ?? 0) + t.amount;
-    }
+  for (const t of items) {
+    if (!includeLoan && t.isLoanMovement === true) continue;
+    if (t.type === 'income') totalIncome += t.amount;
+    else totalExpense += t.amount;
   }
 
-  const totalForPercent = totalExpense || 1;
+  // Phân bố chi tiêu theo danh mục: luôn loại vay/nợ.
+  const categoryAmounts: Record<string, number> = {};
+  let categoryTotal = 0;
+  for (const t of items) {
+    if (t.isLoanMovement === true) continue;
+    if (t.type !== 'expense') continue;
+    categoryAmounts[t.categoryId] = (categoryAmounts[t.categoryId] ?? 0) + t.amount;
+    categoryTotal += t.amount;
+  }
+
+  const totalForPercent = categoryTotal || 1;
   const expenseByCategory: ExpenseByCategory[] = Object.entries(categoryAmounts)
     .map(([categoryId, amount]) => ({
       categoryId,
@@ -125,26 +143,22 @@ async function fetchMonthSummary(userId: string): Promise<MonthSummary> {
   return {
     totalIncome,
     totalExpense,
+    expenseExcludingLoan: categoryTotal,
     balance: totalIncome - totalExpense,
     expenseByCategory,
   };
 }
 
-export function useMonthTransactions() {
+export function useMonthTransactions(includeLoan = false) {
   const [userId, setUserId] = useState<string | null>(null);
-  const [summary, setSummary] = useState<MonthSummary>({
-    totalIncome: 0,
-    totalExpense: 0,
-    balance: 0,
-    expenseByCategory: [],
-  });
+  const [items, setItems] = useState<TransactionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
   const load = useCallback(async (uid: string) => {
     setIsLoading(true);
     try {
-      const data = await fetchMonthSummary(uid);
-      setSummary(data);
+      const data = await fetchMonthItems(uid);
+      setItems(data);
     } catch (error) {
       console.error('Error loading month summary:', error);
       showSnackbar({
@@ -177,12 +191,7 @@ export function useMonthTransactions() {
 
   useEffect(() => {
     if (!userId) {
-      setSummary({
-        totalIncome: 0,
-        totalExpense: 0,
-        balance: 0,
-        expenseByCategory: [],
-      });
+      setItems([]);
       return;
     }
     load(userId);
@@ -191,6 +200,12 @@ export function useMonthTransactions() {
   const refresh = useCallback(() => {
     if (userId) load(userId);
   }, [userId, load]);
+
+  // Toggle includeLoan chỉ tính lại tại JS, không refetch Firestore → tránh lag animation.
+  const summary = useMemo<MonthSummary>(() => {
+    if (items.length === 0) return EMPTY_SUMMARY;
+    return computeSummary(items, includeLoan);
+  }, [items, includeLoan]);
 
   return { ...summary, isLoading, refresh };
 }

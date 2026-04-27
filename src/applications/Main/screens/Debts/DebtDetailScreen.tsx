@@ -18,12 +18,14 @@ import ChevronLeftIcon from '../../../../assets/icons/ChevronLeftIcon';
 import WalletIcon from '../../../../assets/icons/WalletIcon';
 import CheckIcon from '../../../../assets/icons/CheckIcon';
 import { showSnackbar } from '../../../../utils/snackbar';
-import { CurrencyInput, DatePicker, SwipeableRow, FundPicker } from '../../../../components';
+import { CurrencyInput, DatePicker, SwipeableRow, FundPicker, ErrorPopup } from '../../../../components';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
 import { debtRemaining, type DebtRepayment } from '../../../../services/debts';
 import EditNoteDateModal from './components/EditNoteDateModal';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
+import CalendarIcon from '../../../../assets/icons/CalendarIcon';
+import ClockIcon from '../../../../assets/icons/ClockIcon';
 import type { RootStackParamList } from '../../MainScreen';
 
 const DebtDetailScreen: React.FC = () => {
@@ -58,6 +60,11 @@ const DebtDetailScreen: React.FC = () => {
   const [repayDate, setRepayDate] = useState<Date>(new Date());
   const [repayNote, setRepayNote] = useState('');
   const [isRepaying, setIsRepaying] = useState(false);
+  const [errorPopup, setErrorPopup] = useState<{
+    visible: boolean;
+    title: string;
+    message: string;
+  }>({ visible: false, title: 'Lỗi', message: '' });
 
   // Edit repayment modal state
   const [editRepayTarget, setEditRepayTarget] = useState<DebtRepayment | null>(null);
@@ -82,11 +89,17 @@ const DebtDetailScreen: React.FC = () => {
   const openRepay = useCallback(() => {
     if (!debt) return;
     setRepayAmount(debtRemaining(debt));
-    setRepayFundId(debt.fundId || defaultFund?.id || fundsDefaultFirst[0]?.id || '');
+    const originalExists =
+      !!debt.fundId && funds.some((f) => f.id === debt.fundId);
+    setRepayFundId(
+      originalExists
+        ? debt.fundId!
+        : defaultFund?.id || fundsDefaultFirst[0]?.id || '',
+    );
     setRepayDate(new Date());
     setRepayNote('');
     setRepayVisible(true);
-  }, [debt, defaultFund, fundsDefaultFirst]);
+  }, [debt, funds, defaultFund, fundsDefaultFirst]);
 
   const closeRepay = useCallback(() => {
     if (isRepaying) return;
@@ -103,6 +116,20 @@ const DebtDetailScreen: React.FC = () => {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
+    const remaining = debtRemaining(debt);
+    if (repayAmount > remaining) {
+      const isLent = debt.direction === 'lent';
+      setErrorPopup({
+        visible: true,
+        title: isLent ? 'Số tiền thu vượt quá' : 'Số tiền trả vượt quá',
+        message: `Số tiền nhập (${repayAmount.toLocaleString(
+          'vi-VN',
+        )}đ) vượt quá số ${isLent ? 'còn phải thu' : 'còn phải trả'} (${remaining.toLocaleString(
+          'vi-VN',
+        )}đ).`,
+      });
+      return;
+    }
     setIsRepaying(true);
     try {
       await addRepayment(debt.id, {
@@ -115,7 +142,7 @@ const DebtDetailScreen: React.FC = () => {
       showSnackbar({ type: 'success', message: 'Đã ghi nhận' });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Không thể ghi nhận';
-      showSnackbar({ type: 'error', message: msg });
+      setErrorPopup({ visible: true, title: 'Lỗi', message: msg });
     } finally {
       setIsRepaying(false);
     }
@@ -123,7 +150,14 @@ const DebtDetailScreen: React.FC = () => {
 
   const openDeleteDebt = () => {
     if (!debt) return;
-    setDeleteDebtFundId(debt.fundId || defaultFund?.id || fundsDefaultFirst[0]?.id || '');
+    // Fallback nếu quỹ gốc đã bị xóa.
+    const originalExists =
+      !!debt.fundId && funds.some((f) => f.id === debt.fundId);
+    setDeleteDebtFundId(
+      originalExists
+        ? debt.fundId!
+        : defaultFund?.id || fundsDefaultFirst[0]?.id || '',
+    );
     setDeleteDebtOffsetId('');
     setDeleteDebtVisible(true);
   };
@@ -265,98 +299,131 @@ const DebtDetailScreen: React.FC = () => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: Math.max(120, insets.bottom + 120) }}
       >
-        {/* Summary card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryTopRow}>
-            <View style={[styles.summaryIconWrap, { backgroundColor: accentColor + '15' }]}>
-              <WalletIcon width={24} height={24} color={accentColor} />
-            </View>
-            <View style={styles.summaryBadges}>
+        {/* Hero card */}
+        <View style={styles.heroCard}>
+          {/* Header section with tinted accent background */}
+          <View style={[styles.heroHeader, { backgroundColor: accentColor + '12' }]}>
+            <View style={styles.heroHeaderTop}>
               <View
-                style={[
-                  styles.badge,
-                  {
-                    backgroundColor: isLent
-                      ? colors.success + '20'
-                      : '#FEE2E2',
-                  },
-                ]}
+                style={[styles.heroIconWrap, { backgroundColor: accentColor }]}
               >
-                <Text
+                <WalletIcon width={22} height={22} color={colors.white} />
+              </View>
+              <View style={styles.heroBadges}>
+                <View
                   style={[
-                    styles.badgeText,
-                    { color: isLent ? colors.success : '#B91C1C' },
+                    styles.badge,
+                    { backgroundColor: accentColor + '22' },
                   ]}
                 >
-                  {isLent ? 'Cho vay' : 'Đi vay'}
-                </Text>
-              </View>
-              {isSettled && (
-                <View style={[styles.badge, styles.badgeSettled]}>
-                  <CheckIcon width={13} height={13} color={colors.success} />
-                  <Text style={styles.badgeSettledText}>Đã tất toán</Text>
+                  <Text style={[styles.badgeText, { color: accentColor }]}>
+                    {isLent ? 'Cho vay' : 'Đi vay'}
+                  </Text>
                 </View>
-              )}
+                {isSettled && (
+                  <View style={[styles.badge, styles.badgeSettled]}>
+                    <CheckIcon width={13} height={13} color={colors.success} />
+                    <Text style={styles.badgeSettledText}>Đã tất toán</Text>
+                  </View>
+                )}
+              </View>
             </View>
+
+            {isSettled ? (
+              <View style={styles.heroSettledWrap}>
+                <View style={styles.heroSettledIconCircle}>
+                  <CheckIcon width={36} height={36} color={colors.white} />
+                </View>
+                <Text style={styles.heroSettledLabel}>Đã tất toán</Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.heroAmountWrap}>
+                  <Text style={styles.heroAmountLabel}>
+                    {isLent ? 'Còn phải thu' : 'Còn phải trả'}
+                  </Text>
+                  <Text style={[styles.heroAmountValue, { color: accentColor }]}>
+                    {remaining.toLocaleString('vi-VN')}đ
+                  </Text>
+                </View>
+
+                {debt.principal > 0 && (
+                  <View style={styles.heroProgressWrap}>
+                    <View style={styles.heroProgressTrack}>
+                      <View
+                        style={[
+                          styles.heroProgressFill,
+                          { width: `${pct}%`, backgroundColor: accentColor },
+                        ]}
+                      />
+                    </View>
+                    <Text
+                      style={[styles.heroProgressLabel, { color: accentColor }]}
+                    >
+                      {Math.round(pct)}%
+                    </Text>
+                  </View>
+                )}
+              </>
+            )}
           </View>
 
-          <View style={styles.summaryAmounts}>
-            <View style={styles.summaryBlock}>
-              <Text style={styles.summaryLabel}>Còn lại</Text>
-              <Text style={[styles.summaryRemain, { color: accentColor }]}>
-                {remaining.toLocaleString('vi-VN')}đ
-              </Text>
-            </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryBlock}>
-              <Text style={styles.summaryLabel}>Gốc</Text>
-              <Text style={styles.summaryPrincipal}>
+          {/* Stats row */}
+          <View style={styles.heroStatsRow}>
+            <View style={styles.heroStatBlock}>
+              <Text style={styles.heroStatLabel}>Gốc</Text>
+              <Text style={styles.heroStatValue}>
                 {debt.principal.toLocaleString('vi-VN')}đ
               </Text>
             </View>
-            <View style={styles.summaryDivider} />
-            <View style={styles.summaryBlock}>
-              <Text style={styles.summaryLabel}>{isLent ? 'Đã thu' : 'Đã trả'}</Text>
-              <Text style={styles.summaryPaid}>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStatBlock}>
+              <Text style={styles.heroStatLabel}>{isLent ? 'Đã thu' : 'Đã trả'}</Text>
+              <Text style={[styles.heroStatValue, { color: colors.primary }]}>
                 {totalPaid.toLocaleString('vi-VN')}đ
               </Text>
             </View>
           </View>
 
-          {debt.principal > 0 && (
-            <View style={styles.progressTrack}>
-              <View
-                style={[styles.progressFill, { width: `${pct}%`, backgroundColor: accentColor }]}
-              />
-            </View>
-          )}
-
-          <View style={styles.summaryMeta}>
-            {fund && (
-              <View style={styles.metaItem}>
+          {/* Meta chips */}
+          <View style={styles.heroMetaRow}>
+            {fund ? (
+              <View style={styles.metaChip}>
                 {(() => {
                   const FundIcon = getFundIconComponent(fund.icon);
                   const c = fund.color ?? colors.textSecondary;
-                  return <FundIcon width={14} height={14} color={c} />;
+                  return <FundIcon width={13} height={13} color={c} />;
                 })()}
-                <Text style={styles.metaText} numberOfLines={1}>
+                <Text style={styles.metaChipText} numberOfLines={1}>
                   {fund.name}
                 </Text>
               </View>
-            )}
-            <Text style={styles.metaText}>
-              Ngày: {debt.startDate.toLocaleDateString('vi-VN')}
-            </Text>
-            {debt.dueDate && (
-              <Text style={styles.metaTextDue}>
-                Hạn: {debt.dueDate.toLocaleDateString('vi-VN')}
+            ) : debt.fundId ? (
+              <View style={[styles.metaChip, styles.metaChipDeleted]}>
+                <Text style={styles.metaChipDeletedText} numberOfLines={1}>
+                  Quỹ đã bị xóa
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.metaChip}>
+              <CalendarIcon width={13} height={13} color={colors.textSecondary} />
+              <Text style={styles.metaChipText}>
+                {debt.startDate.toLocaleDateString('vi-VN')}
               </Text>
+            </View>
+            {debt.dueDate && (
+              <View style={[styles.metaChip, styles.metaChipDue]}>
+                <ClockIcon width={13} height={13} color={colors.error} />
+                <Text style={styles.metaChipDueText}>
+                  Hạn: {debt.dueDate.toLocaleDateString('vi-VN')}
+                </Text>
+              </View>
             )}
           </View>
 
           {debt.note && (
             <View style={styles.notesBox}>
-              <Text style={styles.notesLabel}>Ghi chú</Text>
+              <Text style={styles.notesLabel}>GHI CHÚ</Text>
               <Text style={styles.notesText}>{debt.note}</Text>
             </View>
           )}
@@ -364,10 +431,17 @@ const DebtDetailScreen: React.FC = () => {
 
         {/* Repayments history */}
         <View style={styles.historySection}>
-          <Text style={styles.sectionTitle}>
-            Lịch sử {isLent ? 'thu' : 'trả'}{' '}
-            <Text style={styles.sectionCount}>({repayments.length})</Text>
-          </Text>
+          <View style={styles.sectionTitleRow}>
+            <View
+              style={[styles.sectionAccentBar, { backgroundColor: accentColor }]}
+            />
+            <Text style={styles.sectionTitle}>
+              Lịch sử {isLent ? 'thu' : 'trả'}
+            </Text>
+            <View style={styles.sectionCountBadge}>
+              <Text style={styles.sectionCountBadgeText}>{repayments.length}</Text>
+            </View>
+          </View>
 
           {repayments.length === 0 ? (
             <View style={styles.historyEmpty}>
@@ -389,40 +463,87 @@ const DebtDetailScreen: React.FC = () => {
                       buttonWidth={70}
                     >
                       <View style={styles.historyItem}>
-                        <View style={styles.historyLeft}>
-                          <View
-                            style={[
-                              styles.historyIndex,
-                              { backgroundColor: accentColor + '18' },
-                            ]}
-                          >
-                            <Text style={[styles.historyIndexText, { color: accentColor }]}>
-                              {repayments.length - idx}
-                            </Text>
-                          </View>
-                          <View style={styles.historyInfo}>
-                            <Text style={styles.historyAmount}>
+                        <View
+                          style={[
+                            styles.historyAccentBar,
+                            { backgroundColor: accentColor },
+                          ]}
+                        />
+                        <View style={styles.historyContent}>
+                          <View style={styles.historyTopRow}>
+                            <View
+                              style={[
+                                styles.historyIndex,
+                                { backgroundColor: accentColor + '15' },
+                              ]}
+                            >
+                              <Text
+                                style={[
+                                  styles.historyIndexText,
+                                  { color: accentColor },
+                                ]}
+                              >
+                                #{repayments.length - idx}
+                              </Text>
+                            </View>
+                            <Text
+                              style={[styles.historyAmount, { color: accentColor }]}
+                            >
+                              {isLent ? '+' : '−'}
                               {r.amount.toLocaleString('vi-VN')}đ
                             </Text>
-                            <View style={styles.historyMeta}>
-                              <Text style={styles.historyDate}>
+                          </View>
+                          <View style={styles.historyMetaRow}>
+                            <View style={styles.historyMetaChip}>
+                              <CalendarIcon
+                                width={12}
+                                height={12}
+                                color={colors.textSecondary}
+                              />
+                              <Text style={styles.historyMetaText}>
                                 {r.date.toLocaleDateString('vi-VN')}
                               </Text>
-                              {repFund && (
-                                <>
-                                  <Text style={styles.historyDot}>•</Text>
-                                  <Text style={styles.historyFund} numberOfLines={1}>
-                                    {repFund.name}
-                                  </Text>
-                                </>
-                              )}
                             </View>
-                            {r.note && (
-                              <Text style={styles.historyNote} numberOfLines={2}>
-                                {r.note}
-                              </Text>
-                            )}
+                            {repFund ? (
+                              <View style={styles.historyMetaChip}>
+                                {(() => {
+                                  const FundIcon = getFundIconComponent(
+                                    repFund.icon,
+                                  );
+                                  const c =
+                                    repFund.color ?? colors.textSecondary;
+                                  return (
+                                    <FundIcon width={12} height={12} color={c} />
+                                  );
+                                })()}
+                                <Text
+                                  style={styles.historyMetaText}
+                                  numberOfLines={1}
+                                >
+                                  {repFund.name}
+                                </Text>
+                              </View>
+                            ) : r.fundId ? (
+                              <View
+                                style={[
+                                  styles.historyMetaChip,
+                                  styles.historyMetaChipDeleted,
+                                ]}
+                              >
+                                <Text
+                                  style={styles.historyMetaTextDeleted}
+                                  numberOfLines={1}
+                                >
+                                  Quỹ đã bị xóa
+                                </Text>
+                              </View>
+                            ) : null}
                           </View>
+                          {r.note && (
+                            <Text style={styles.historyNote} numberOfLines={2}>
+                              {r.note}
+                            </Text>
+                          )}
                         </View>
                       </View>
                     </SwipeableRow>
@@ -437,12 +558,21 @@ const DebtDetailScreen: React.FC = () => {
       {!isSettled && (
         <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
           <TouchableOpacity
-            style={[styles.repayBtn, { backgroundColor: accentColor }]}
+            style={[
+              styles.repayBtn,
+              {
+                backgroundColor: accentColor,
+                shadowColor: accentColor,
+              },
+            ]}
             onPress={openRepay}
             activeOpacity={0.85}
           >
+            <View style={styles.repayBtnIcon}>
+              <Text style={styles.repayBtnIconText}>+</Text>
+            </View>
             <Text style={styles.repayBtnText}>
-              {isLent ? '+ Ghi nhận thu tiền' : '+ Ghi nhận trả nợ'}
+              {isLent ? 'Ghi nhận thu tiền' : 'Ghi nhận trả nợ'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -826,6 +956,13 @@ const DebtDetailScreen: React.FC = () => {
         }}
         successMessage="Đã cập nhật giao dịch"
       />
+
+      <ErrorPopup
+        visible={errorPopup.visible}
+        title={errorPopup.title}
+        message={errorPopup.message}
+        onClose={() => setErrorPopup((s) => ({ ...s, visible: false }))}
+      />
     </View>
   );
 };
@@ -840,13 +977,13 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.backgroundSecondary,
+    borderBottomColor: colors.inputBackground,
   },
   backBtn: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.inputBackground,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -879,32 +1016,42 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  summaryCard: {
+  heroCard: {
     marginHorizontal: 16,
     marginTop: 14,
     backgroundColor: colors.white,
-    borderRadius: 18,
-    padding: 16,
-    gap: 12,
+    borderRadius: 20,
+    overflow: 'hidden',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  summaryTopRow: {
+  heroHeader: {
+    paddingHorizontal: 18,
+    paddingTop: 16,
+    paddingBottom: 18,
+    gap: 14,
+  },
+  heroHeaderTop: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
   },
-  summaryIconWrap: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+  heroIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
   },
-  summaryBadges: {
+  heroBadges: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -921,69 +1068,170 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 10,
   },
-  badgeText: { fontSize: 12, fontWeight: '700' },
-  badgeSettled: { backgroundColor: colors.success + '20' },
-  badgeSettledText: { fontSize: 12, fontWeight: '700', color: colors.success },
-  summaryAmounts: {
+  badgeText: { fontSize: 12, fontWeight: '800' },
+  badgeSettled: { backgroundColor: colors.success + '22' },
+  badgeSettledText: { fontSize: 12, fontWeight: '800', color: colors.success },
+  heroAmountWrap: {
+    alignItems: 'center',
+    gap: 4,
+  },
+  heroSettledWrap: {
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 6,
+  },
+  heroSettledIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: colors.success,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  heroSettledLabel: {
+    fontSize: 18,
+    fontWeight: '900',
+    color: colors.success,
+    letterSpacing: 0.3,
+  },
+  heroAmountLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  heroAmountValue: {
+    fontSize: 28,
+    fontWeight: '900',
+    letterSpacing: -0.5,
+  },
+  heroProgressWrap: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
   },
-  summaryBlock: { flex: 1, alignItems: 'center', gap: 4 },
-  summaryDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: colors.backgroundSecondary,
-  },
-  summaryLabel: { fontSize: 11, fontWeight: '600', color: colors.textSecondary },
-  summaryRemain: { fontSize: 18, fontWeight: '900' },
-  summaryPrincipal: { fontSize: 14, fontWeight: '700', color: colors.text },
-  summaryPaid: { fontSize: 14, fontWeight: '700', color: colors.primary },
-  progressTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.backgroundSecondary,
+  heroProgressTrack: {
+    flex: 1,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.white,
     overflow: 'hidden',
   },
-  progressFill: { height: '100%', borderRadius: 3 },
-  summaryMeta: {
+  heroProgressFill: { height: '100%', borderRadius: 4 },
+  heroProgressLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    minWidth: 36,
+    textAlign: 'right',
+  },
+  heroStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    backgroundColor: colors.white,
+  },
+  heroStatBlock: { flex: 1, alignItems: 'center', gap: 4 },
+  heroStatDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: colors.inputBackground,
+  },
+  heroStatLabel: { fontSize: 11, fontWeight: '700', color: colors.textSecondary, textTransform: 'uppercase', letterSpacing: 0.3 },
+  heroStatValue: { fontSize: 15, fontWeight: '800', color: colors.text },
+  heroMetaRow: {
     flexDirection: 'row',
     alignItems: 'center',
     flexWrap: 'wrap',
-    gap: 10,
+    gap: 6,
+    paddingHorizontal: 18,
+    paddingBottom: 14,
   },
-  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  metaText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-  metaTextDue: { fontSize: 12, fontWeight: '700', color: colors.error },
+  metaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: colors.inputBackground,
+  },
+  metaChipText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },
+  metaChipDue: { backgroundColor: colors.error + '15' },
+  metaChipDueText: { fontSize: 12, fontWeight: '800', color: colors.error },
+  metaChipDeleted: { backgroundColor: colors.error + '15' },
+  metaChipDeletedText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: colors.error,
+    fontStyle: 'italic',
+  },
   notesBox: {
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.backgroundSecondary,
+    marginHorizontal: 18,
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: colors.inputBackground,
     gap: 4,
   },
-  notesLabel: { fontSize: 11, fontWeight: '700', color: colors.textSecondary },
+  notesLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 0.5,
+  },
   notesText: { fontSize: 13, color: colors.text, lineHeight: 19 },
 
   historySection: {
     marginHorizontal: 16,
     marginTop: 18,
   },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: colors.text,
-    marginBottom: 10,
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
   },
-  sectionCount: {
-    fontWeight: '700',
+  sectionAccentBar: {
+    width: 4,
+    height: 16,
+    borderRadius: 2,
+  },
+  sectionTitle: {
+    fontSize: 15,
+    fontWeight: '900',
+    color: colors.text,
+  },
+  sectionCountBadge: {
+    minWidth: 22,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 10,
+    backgroundColor: colors.inputBackground,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionCountBadgeText: {
+    fontSize: 11,
+    fontWeight: '800',
     color: colors.textSecondary,
   },
   historyEmpty: {
-    padding: 20,
+    padding: 28,
     alignItems: 'center',
-    borderRadius: 12,
-    backgroundColor: colors.backgroundSecondary,
+    borderRadius: 14,
+    backgroundColor: colors.inputBackground,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderStyle: 'dashed',
   },
-  historyEmptyText: { fontSize: 13, color: colors.textSecondary },
+  historyEmptyText: { fontSize: 13, color: colors.textSecondary, fontStyle: 'italic' },
   historyList: { gap: 8 },
   historyItemWrapper: {
     borderRadius: 14,
@@ -997,40 +1245,98 @@ const styles = StyleSheet.create({
   historyItem: {
     backgroundColor: colors.white,
     borderRadius: 14,
-    padding: 12,
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'stretch',
+    overflow: 'hidden',
   },
-  historyLeft: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, flex: 1 },
-  historyIndex: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
+  historyAccentBar: {
+    width: 4,
+  },
+  historyContent: {
+    flex: 1,
+    padding: 12,
+    gap: 8,
+  },
+  historyTopRow: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
   },
-  historyIndexText: { fontSize: 12, fontWeight: '800' },
-  historyInfo: { flex: 1, gap: 2 },
-  historyAmount: { fontSize: 15, fontWeight: '800', color: colors.text },
-  historyMeta: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  historyDate: { fontSize: 12, color: colors.textSecondary, fontWeight: '600' },
-  historyDot: { fontSize: 12, color: colors.textLight },
-  historyFund: { fontSize: 12, color: colors.textSecondary, fontWeight: '600', flex: 1 },
-  historyNote: { fontSize: 12, color: colors.textSecondary, fontStyle: 'italic' },
+  historyIndex: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 8,
+  },
+  historyIndexText: { fontSize: 11, fontWeight: '800' },
+  historyAmount: { fontSize: 16, fontWeight: '900' },
+  historyMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  historyMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: colors.inputBackground,
+  },
+  historyMetaText: { fontSize: 11, fontWeight: '700', color: colors.textSecondary },
+  historyMetaChipDeleted: { backgroundColor: colors.error + '15' },
+  historyMetaTextDeleted: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.error,
+    fontStyle: 'italic',
+  },
+  historyNote: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
+    paddingTop: 2,
+    borderTopWidth: 1,
+    borderTopColor: colors.inputBackground,
+  },
 
   footer: {
     paddingHorizontal: 16,
-    paddingTop: 10,
+    paddingTop: 12,
     backgroundColor: colors.background,
     borderTopWidth: 1,
-    borderTopColor: colors.backgroundSecondary,
+    borderTopColor: colors.inputBackground,
   },
   repayBtn: {
-    borderRadius: 14,
-    paddingVertical: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    borderRadius: 16,
+    paddingVertical: 15,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
-  repayBtnText: { color: colors.white, fontWeight: '800', fontSize: 15 },
+  repayBtnIcon: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255,255,255,0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  repayBtnIconText: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 20,
+    marginTop: -1,
+  },
+  repayBtnText: { color: colors.white, fontWeight: '900', fontSize: 15, letterSpacing: 0.3 },
 
   // Modal
   modal: { justifyContent: 'flex-end', margin: 0 },
@@ -1133,7 +1439,7 @@ const styles = StyleSheet.create({
   modalButtons: { flexDirection: 'row', gap: 10, marginTop: 6 },
   modalCancel: {
     flex: 1,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.inputBackground,
     borderRadius: 14,
     paddingVertical: 14,
     alignItems: 'center',
@@ -1173,7 +1479,7 @@ const styles = StyleSheet.create({
   deficitNoCandidate: {
     padding: 10,
     borderRadius: 10,
-    backgroundColor: colors.backgroundSecondary,
+    backgroundColor: colors.inputBackground,
     fontSize: 13,
     color: colors.textSecondary,
     textAlign: 'center',

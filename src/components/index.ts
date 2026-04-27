@@ -11,3 +11,5 @@ export { default as MonthPicker } from './MonthPicker/MonthPicker';
 export { default as ErrorPopup } from './ErrorPopup';
 export { default as FundPicker } from './FundPicker/FundPicker';
 export type { FundPickerProps, FundPickerLayout } from './FundPicker/FundPicker';
+export { default as AppSwitch } from './AppSwitch/AppSwitch';
+export type { AppSwitchProps } from './AppSwitch/AppSwitch';
