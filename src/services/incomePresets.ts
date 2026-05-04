@@ -4,6 +4,7 @@ import {
   collection,
   doc,
   getDoc,
+  onSnapshot,
   setDoc,
   serverTimestamp,
 } from '@react-native-firebase/firestore';
@@ -60,6 +61,30 @@ export async function saveIncomePresetSettings(
       updatedAt: serverTimestamp(),
     },
     { merge: true },
+  );
+}
+
+/** Lắng nghe realtime cấu hình nguồn thu của user. Trả về hàm hủy đăng ký. */
+export function subscribeIncomePresetSettings(
+  userId: string,
+  onChange: (settings: IncomePresetSettings) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  const ref = doc(userSettingsCollection, userId);
+  console.log('[IncomePresets] subscribing for', userId);
+  return onSnapshot(
+    ref,
+    (snap) => {
+      const data = snap.data() as any;
+      console.log('[IncomePresets] snapshot fired, exists=', snap.exists, 'fromCache=', snap.metadata?.fromCache);
+      const presets = (data?.[SETTINGS_KEY_PRESETS] as IncomePreset[]) ?? [];
+      const defaultPresetId = (data?.[SETTINGS_KEY_DEFAULT] as string) ?? undefined;
+      onChange({ presets, defaultPresetId });
+    },
+    (error) => {
+      console.error('[IncomePresets] snapshot error:', error);
+      onError?.(error);
+    },
   );
 }
 

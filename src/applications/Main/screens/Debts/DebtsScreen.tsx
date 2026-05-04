@@ -375,7 +375,7 @@ const DebtsScreen: React.FC = () => {
               <View style={styles.amountBlock}>
                 <Text style={styles.amountLabel}>Gốc</Text>
                 <Text style={styles.amountPrincipal}>
-                  {debt.principal.toLocaleString('vi-VN')}đ
+                  {remaining.toLocaleString('vi-VN')}đ
                 </Text>
               </View>
             </View>

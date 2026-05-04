@@ -23,7 +23,6 @@ import { colors } from '../../utils/color';
 import {
   setStoredUser,
   ensureUserProfile,
-  cacheTransactionResetYearFromFirestoreToAsyncStorage,
   type AuthStoredUser,
 } from '../../services';
 import { ErrorPopup } from '../../components';
@@ -73,9 +72,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
       await setStoredUser(baseUser);
       try {
         await ensureUserProfile(baseUser);
-        await cacheTransactionResetYearFromFirestoreToAsyncStorage(baseUser.uid);
       } catch (e) {
-        console.warn('ensureUserProfile / cache reset year:', e);
+        console.warn('ensureUserProfile:', e);
       }
 
       onLoginSuccess();

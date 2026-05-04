@@ -9,8 +9,8 @@ import React, {
 import { getApp } from '@react-native-firebase/app';
 import { getAuth } from '@react-native-firebase/auth';
 import {
-  getIncomePresetSettings,
   saveIncomePresetSettings,
+  subscribeIncomePresetSettings,
   type IncomePreset,
 } from '../services/incomePresets';
 
@@ -40,40 +40,40 @@ const IncomePresetsProviderInternal: React.FC<{ children: ReactNode }> = ({
   const [presets, setPresets] = useState<IncomePreset[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const loadPresets = useCallback(
-    async (uid: string) => {
-      setIsLoading(true);
-      try {
-        const settings = await getIncomePresetSettings(uid);
-        setPresets(settings.presets ?? []);
-      } catch {
-        // ignore errors, keep previous state
-      } finally {
-        setIsLoading(false);
-      }
-    },
-    [],
-  );
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const uid = await getCurrentUserId();
-      if (cancelled) return;
-      setUserId(uid);
-      if (uid) {
-        await loadPresets(uid);
-      }
+      if (!cancelled) setUserId(uid);
     })();
     return () => {
       cancelled = true;
     };
-  }, [loadPresets]);
+  }, []);
 
-  const reload = useCallback(async () => {
-    if (!userId) return;
-    await loadPresets(userId);
-  }, [userId, loadPresets]);
+  useEffect(() => {
+    if (!userId) {
+      setPresets([]);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    const unsub = subscribeIncomePresetSettings(
+      userId,
+      (settings) => {
+        setPresets(settings.presets ?? []);
+        setIsLoading(false);
+      },
+      () => {
+        // Giữ state cũ nếu lỗi.
+        setIsLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [userId]);
+
+  // reload là no-op vì onSnapshot luôn giữ presets đồng bộ. Giữ API để caller cũ không phải đổi.
+  const reload = useCallback(async () => {}, []);
 
   const savePresets = useCallback(
     async (next: IncomePreset[]) => {

@@ -10,6 +10,7 @@ import {
   ScrollView,
   Animated,
   Pressable,
+  TextInput,
   type LayoutChangeEvent,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,6 +27,7 @@ import {
   type TransactionTimeFilter,
 } from './hooks/useTransactions';
 import CalendarIcon from '../../../../assets/icons/CalendarIcon';
+import SearchIcon from '../../../../assets/icons/SearchIcon';
 import { Skeleton, SwipeableRow, ErrorPopup, FundPicker, AppSwitch } from '../../../../components';
 import { useHomeDataChanged } from '../../../../contexts/HomeDataChangedContext';
 import type { RootStackParamList } from '../../MainScreen';
@@ -246,6 +248,8 @@ const TransactionScreen: React.FC = () => {
   const [showFilterToggle, setShowFilterToggle] = useState(false);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [floatingFilterVisible, setFloatingFilterVisible] = useState(false);
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   /** Chiều cao thật của bộ lọc — tránh khung 340px tạo khoảng trắng lớn */
   const [filterPanelHeight, setFilterPanelHeight] = useState(FILTER_PANEL_HEIGHT_FALLBACK);
   const filterCollapsedRef = useRef<boolean>(false);
@@ -541,6 +545,14 @@ const TransactionScreen: React.FC = () => {
         typeFilter === 'all' ? base : base.filter(t => t.type === typeFilter);
     }
 
+    // Lọc theo từ khóa note (case-insensitive) — áp dụng cho cả 2 tab.
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      byKind = byKind.filter((t) =>
+        (t.note ?? '').toLowerCase().includes(q),
+      );
+    }
+
     const toViewItem = (t: TransactionRecord): TransactionViewItem => ({
       id: t.id,
       categoryId: t.categoryId,
@@ -635,7 +647,7 @@ const TransactionScreen: React.FC = () => {
     const all = [...regularItems, ...loanGroupItems];
     all.sort((a, b) => b.rawDate.getTime() - a.rawDate.getTime());
     return all;
-  }, [transactions, activeFilter, typeFilter, mainTab, showLoanInList, loanDirectionFilter, debtById]);
+  }, [transactions, activeFilter, typeFilter, mainTab, showLoanInList, loanDirectionFilter, debtById, searchQuery]);
 
   // totalIncome/Expense scope:
   //  - mainTab 'debts': chỉ tx vay/nợ
@@ -925,7 +937,7 @@ const TransactionScreen: React.FC = () => {
               <Text style={styles.loanGroupAmountSep}>•</Text>
               <Text style={styles.loanGroupAmountLabel}>Gốc</Text>
               <Text style={styles.loanGroupPrincipal}>
-                {data.principal.toLocaleString('vi-VN')}đ
+                {data.remaining.toLocaleString('vi-VN')}đ
               </Text>
             </View>
           </View>
@@ -1395,6 +1407,22 @@ const TransactionScreen: React.FC = () => {
               width={20}
               height={20}
               color={isDateFilterActive ? colors.white : colors.text}
+            />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[
+              styles.filterIconButton,
+              searchQuery.trim().length > 0 && styles.filterIconButtonActive,
+            ]}
+            activeOpacity={0.7}
+            onPress={() => setSearchVisible(true)}
+          >
+            <SearchIcon
+              width={20}
+              height={20}
+              color={
+                searchQuery.trim().length > 0 ? colors.white : colors.text
+              }
             />
           </TouchableOpacity>
         </View>
@@ -2257,6 +2285,47 @@ const TransactionScreen: React.FC = () => {
         </View>
       )}
 
+      {searchVisible && (
+        <View style={styles.floatingFilterWrap} pointerEvents="box-none">
+          <Pressable
+            style={styles.floatingFilterBackdrop}
+            onPress={() => setSearchVisible(false)}
+          />
+          <View
+            style={[styles.searchModalCard, { marginTop: insets.top + 58 }]}
+          >
+            <View style={styles.searchInputWrap}>
+              <SearchIcon
+                width={18}
+                height={18}
+                color={colors.textSecondary}
+              />
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Tìm theo ghi chú..."
+                placeholderTextColor={colors.textLight}
+                autoFocus
+                returnKeyType="search"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity
+                  onPress={() => setSearchQuery('')}
+                  hitSlop={8}
+                  style={styles.searchClearBtn}
+                >
+                  <Text style={styles.searchClearText}>×</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+            <Text style={styles.searchHint}>
+              Tìm những giao dịch có ghi chú khớp từ khóa.
+            </Text>
+          </View>
+        </View>
+      )}
+
       <View style={styles.belowFilterSection}>
         {/* Transaction List / Skeleton */}
         {((!isInitialized && transactions.length === 0) ||
@@ -2434,6 +2503,56 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 8 },
     elevation: 8,
+  },
+  searchModalCard: {
+    marginHorizontal: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    borderRadius: 16,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    shadowColor: colors.black + '20',
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+    gap: 8,
+  },
+  searchInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.inputBackground,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.text,
+    paddingVertical: 4,
+  },
+  searchClearBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  searchClearText: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: colors.textSecondary,
+    lineHeight: 18,
+    marginTop: -1,
+  },
+  searchHint: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontStyle: 'italic',
   },
   typeFilterRow: {
     flexDirection: 'row',

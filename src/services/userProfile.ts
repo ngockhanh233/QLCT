@@ -12,13 +12,9 @@ import type { AuthStoredUser } from './authStorage';
 const firestoreInstance = getFirestore(getApp());
 const USERS_COLLECTION = 'users';
 
-/** Năm dương lịch đã chạy dọn transaction cũ gần nhất — lưu trên Firestore + cache AsyncStorage (resetData) */
-export const LAST_TRANSACTION_RESET_YEAR_FIELD = 'lastTransactionResetYear';
-
 export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUser: boolean }> {
   const ref = doc(firestoreInstance, USERS_COLLECTION, user.uid);
   const snap = await getDoc(ref);
-  const currentYear = new Date().getFullYear();
 
   if (snap.exists()) {
     const data = (snap.data() ?? {}) as Record<string, unknown>;
@@ -36,13 +32,6 @@ export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUs
     if (data.displayName !== displayName) patch.displayName = displayName;
     if (data.photoURL !== photoURL) patch.photoURL = photoURL;
 
-    if (
-      data[LAST_TRANSACTION_RESET_YEAR_FIELD] === undefined ||
-      data[LAST_TRANSACTION_RESET_YEAR_FIELD] === null
-    ) {
-      patch[LAST_TRANSACTION_RESET_YEAR_FIELD] = currentYear - 1;
-    }
-
     if (Object.keys(patch).length > 0) {
       patch.updatedAt = serverTimestamp();
       await updateDoc(ref, patch);
@@ -57,7 +46,6 @@ export async function ensureUserProfile(user: AuthStoredUser): Promise<{ isNewUs
     displayName: user.displayName ?? null,
     photoURL: user.photoURL ?? null,
     isNewUser: true,
-    [LAST_TRANSACTION_RESET_YEAR_FIELD]: currentYear,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });

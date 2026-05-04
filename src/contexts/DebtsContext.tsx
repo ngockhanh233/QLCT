@@ -9,26 +9,31 @@ import React, {
 } from 'react';
 import { getStoredUser } from '../services';
 import {
-  fetchDebts,
+  subscribeDebts,
   createDebt,
   addDebtRepayment,
+  addDebtBorrow,
   deleteDebt,
   deleteDebtRepayment,
+  deleteDebtBorrow,
   updateDebtNoteAndStartDate,
   updateDebtRepayment,
+  updateDebtBorrow,
   debtRemaining,
   type DebtRecord,
   type DebtDirection,
 } from '../services/debts';
-import { useFunds } from '../applications/Main/screens/FundManagement/hooks/useFunds';
 import { useHomeDataChanged } from './HomeDataChangedContext';
 
 type CreateDebtInput = Parameters<typeof createDebt>[1];
 type AddRepaymentInput = Parameters<typeof addDebtRepayment>[2];
+type AddBorrowInput = Parameters<typeof addDebtBorrow>[2];
 type DeleteRepaymentOpts = Parameters<typeof deleteDebtRepayment>[3];
+type DeleteBorrowOpts = Parameters<typeof deleteDebtBorrow>[3];
 type DeleteDebtOpts = Parameters<typeof deleteDebt>[2];
 type UpdateDebtNoteAndDateInput = Parameters<typeof updateDebtNoteAndStartDate>[2];
 type UpdateRepaymentNoteAndDateInput = Parameters<typeof updateDebtRepayment>[3];
+type UpdateBorrowNoteAndDateInput = Parameters<typeof updateDebtBorrow>[3];
 
 type DebtsContextValue = {
   debts: DebtRecord[];
@@ -36,10 +41,16 @@ type DebtsContextValue = {
   reload: () => Promise<void>;
   createDebt: (input: CreateDebtInput) => Promise<string | null>;
   addRepayment: (debtId: string, input: AddRepaymentInput) => Promise<boolean>;
+  addBorrow: (debtId: string, input: AddBorrowInput) => Promise<boolean>;
   deleteRepayment: (
     debtId: string,
     repaymentId: string,
     opts?: DeleteRepaymentOpts,
+  ) => Promise<boolean>;
+  deleteBorrow: (
+    debtId: string,
+    borrowId: string,
+    opts?: DeleteBorrowOpts,
   ) => Promise<boolean>;
   deleteDebt: (debtId: string, opts?: DeleteDebtOpts) => Promise<boolean>;
   updateDebtNoteAndDate: (
@@ -51,6 +62,11 @@ type DebtsContextValue = {
     repaymentId: string,
     input: UpdateRepaymentNoteAndDateInput,
   ) => Promise<boolean>;
+  updateBorrowNoteAndDate: (
+    debtId: string,
+    borrowId: string,
+    input: UpdateBorrowNoteAndDateInput,
+  ) => Promise<boolean>;
   totalsByDirection: { lent: number; borrowed: number };
 };
 
@@ -60,30 +76,14 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
   const [userId, setUserId] = useState<string | null>(null);
   const [debts, setDebts] = useState<DebtRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const { refresh: refreshFunds } = useFunds();
   const { markHomeDataChanged, markTransactionListNeedsRefresh } = useHomeDataChanged();
-
-  const load = useCallback(async (uid: string) => {
-    setIsLoading(true);
-    try {
-      const items = await fetchDebts(uid);
-      setDebts(items);
-    } catch (error) {
-      console.error('Error loading debts:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const stored = await getStoredUser();
-        if (cancelled) return;
-        const uid = stored?.uid ?? null;
-        setUserId(uid);
-        if (uid) await load(uid);
+        if (!cancelled) setUserId(stored?.uid ?? null);
       } catch (error) {
         if (!cancelled) console.error('Error init debts context:', error);
       }
@@ -91,21 +91,36 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     return () => {
       cancelled = true;
     };
-  }, [load]);
+  }, []);
 
-  const reload = useCallback(async () => {
-    if (!userId) return;
-    await load(userId);
-  }, [userId, load]);
+  useEffect(() => {
+    if (!userId) {
+      setDebts([]);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    const unsub = subscribeDebts(
+      userId,
+      (items) => {
+        setDebts(items);
+        setIsLoading(false);
+      },
+      (error) => {
+        console.error('Debts snapshot error:', error);
+        setIsLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [userId]);
+
+  // reload là no-op vì onSnapshot luôn giữ debts đồng bộ. Giữ API để caller cũ không phải đổi.
+  const reload = useCallback(async () => {}, []);
 
   const afterMutation = useCallback(async () => {
-    await Promise.all([
-      userId ? load(userId) : Promise.resolve(),
-      refreshFunds(),
-    ]);
     markHomeDataChanged();
     markTransactionListNeedsRefresh();
-  }, [userId, load, refreshFunds, markHomeDataChanged, markTransactionListNeedsRefresh]);
+  }, [markHomeDataChanged, markTransactionListNeedsRefresh]);
 
   const createDebtCb = useCallback(
     async (input: CreateDebtInput): Promise<string | null> => {
@@ -131,6 +146,21 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
         return true;
       } catch (error) {
         console.error('Error adding debt repayment:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const addBorrowCb = useCallback(
+    async (debtId: string, input: AddBorrowInput): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await addDebtBorrow(userId, debtId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error adding debt borrow:', error);
         throw error;
       }
     },
@@ -208,6 +238,44 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     [userId, afterMutation],
   );
 
+  const deleteBorrowCb = useCallback(
+    async (
+      debtId: string,
+      borrowId: string,
+      opts?: DeleteBorrowOpts,
+    ): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await deleteDebtBorrow(userId, debtId, borrowId, opts);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error deleting debt borrow:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const updateBorrowNoteAndDateCb = useCallback(
+    async (
+      debtId: string,
+      borrowId: string,
+      input: UpdateBorrowNoteAndDateInput,
+    ): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await updateDebtBorrow(userId, debtId, borrowId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error updating debt borrow:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
   const totalsByDirection = useMemo(() => {
     let lent = 0;
     let borrowed = 0;
@@ -227,10 +295,13 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     reload,
     createDebt: createDebtCb,
     addRepayment: addRepaymentCb,
+    addBorrow: addBorrowCb,
     deleteRepayment: deleteRepaymentCb,
+    deleteBorrow: deleteBorrowCb,
     deleteDebt: deleteDebtCb,
     updateDebtNoteAndDate: updateDebtNoteAndDateCb,
     updateRepaymentNoteAndDate: updateRepaymentNoteAndDateCb,
+    updateBorrowNoteAndDate: updateBorrowNoteAndDateCb,
     totalsByDirection,
   };
 
@@ -250,10 +321,13 @@ export function useDebts(): DebtsContextValue {
       reload: async () => {},
       createDebt: async () => null,
       addRepayment: async () => false,
+      addBorrow: async () => false,
       deleteRepayment: async () => false,
+      deleteBorrow: async () => false,
       deleteDebt: async () => false,
       updateDebtNoteAndDate: async () => false,
       updateRepaymentNoteAndDate: async () => false,
+      updateBorrowNoteAndDate: async () => false,
       totalsByDirection: { lent: 0, borrowed: 0 },
     };
   }

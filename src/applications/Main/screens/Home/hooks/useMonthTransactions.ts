@@ -5,7 +5,7 @@ import {
   collection,
   query,
   where,
-  getDocs,
+  onSnapshot,
   orderBy,
   FirebaseFirestoreTypes,
 } from '@react-native-firebase/firestore';
@@ -67,45 +67,28 @@ const EMPTY_SUMMARY: MonthSummary = {
   expenseByCategory: [],
 };
 
-async function fetchMonthItems(userId: string): Promise<TransactionRecord[]> {
-  const now = new Date();
-  const start = startOfMonth(now);
-  const end = endOfMonth(now);
+function mapTransactionDoc(docSnap: QueryDoc): TransactionRecord {
+  const data = docSnap.data() as Record<string, unknown>;
+  const ts = data.transactionDate as
+    | FirebaseFirestoreTypes.Timestamp
+    | Date
+    | undefined;
+  const date =
+    ts instanceof Date
+      ? ts
+      : ts && typeof (ts as FirebaseFirestoreTypes.Timestamp).toDate === 'function'
+      ? (ts as FirebaseFirestoreTypes.Timestamp).toDate()
+      : new Date();
 
-  const q = query(
-    transactionsCollection,
-    where('userId', '==', userId),
-    where('transactionDate', '>=', start),
-    where('transactionDate', '<=', end),
-    orderBy('transactionDate', 'desc'),
-  );
-
-  const snapshot = await getDocs(q);
-  console.log('[Firestore] Home.fetchMonthItems size=', snapshot.size);
-
-  return snapshot.docs.map((docSnap: QueryDoc) => {
-    const data = docSnap.data() as Record<string, unknown>;
-    const ts = data.transactionDate as
-      | FirebaseFirestoreTypes.Timestamp
-      | Date
-      | undefined;
-    const date =
-      ts instanceof Date
-        ? ts
-        : ts && typeof (ts as FirebaseFirestoreTypes.Timestamp).toDate === 'function'
-        ? (ts as FirebaseFirestoreTypes.Timestamp).toDate()
-        : new Date();
-
-    return {
-      id: docSnap.id,
-      userId: data.userId as string,
-      categoryId: data.categoryId as string,
-      amount: (data.amount as number) ?? 0,
-      type: data.type as 'income' | 'expense',
-      transactionDate: date,
-      isLoanMovement: data.isLoanMovement === true,
-    };
-  });
+  return {
+    id: docSnap.id,
+    userId: data.userId as string,
+    categoryId: data.categoryId as string,
+    amount: (data.amount as number) ?? 0,
+    type: data.type as 'income' | 'expense',
+    transactionDate: date,
+    isLoanMovement: data.isLoanMovement === true,
+  };
 }
 
 function computeSummary(
@@ -154,22 +137,6 @@ export function useMonthTransactions(includeLoan = false) {
   const [items, setItems] = useState<TransactionRecord[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const load = useCallback(async (uid: string) => {
-    setIsLoading(true);
-    try {
-      const data = await fetchMonthItems(uid);
-      setItems(data);
-    } catch (error) {
-      console.error('Error loading month summary:', error);
-      showSnackbar({
-        message: 'Không thể tải tóm tắt tháng. Vui lòng thử lại',
-        type: 'error',
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -192,14 +159,44 @@ export function useMonthTransactions(includeLoan = false) {
   useEffect(() => {
     if (!userId) {
       setItems([]);
+      setIsLoading(false);
       return;
     }
-    load(userId);
-  }, [userId, load]);
 
-  const refresh = useCallback(() => {
-    if (userId) load(userId);
-  }, [userId, load]);
+    const now = new Date();
+    const start = startOfMonth(now);
+    const end = endOfMonth(now);
+    const q = query(
+      transactionsCollection,
+      where('userId', '==', userId),
+      where('transactionDate', '>=', start),
+      where('transactionDate', '<=', end),
+      orderBy('transactionDate', 'desc'),
+    );
+
+    console.log('[Month] subscribing for', userId);
+    setIsLoading(true);
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        console.log('[Month] snapshot fired, size=', snapshot.size, 'fromCache=', snapshot.metadata?.fromCache);
+        setItems(snapshot.docs.map(mapTransactionDoc));
+        setIsLoading(false);
+      },
+      (error) => {
+        console.error('[Month] snapshot error:', error);
+        showSnackbar({
+          message: 'Không thể tải tóm tắt tháng. Vui lòng thử lại',
+          type: 'error',
+        });
+        setIsLoading(false);
+      },
+    );
+    return () => unsub();
+  }, [userId]);
+
+  // refresh là no-op vì onSnapshot tự cập nhật. Giữ API để caller cũ không phải đổi.
+  const refresh = useCallback(() => {}, []);
 
   // Toggle includeLoan chỉ tính lại tại JS, không refetch Firestore → tránh lag animation.
   const summary = useMemo<MonthSummary>(() => {

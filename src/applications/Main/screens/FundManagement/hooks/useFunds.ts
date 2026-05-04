@@ -7,6 +7,7 @@ import {
   where,
   getDocs,
   getDoc,
+  onSnapshot,
   orderBy,
   addDoc,
   doc,
@@ -178,22 +179,6 @@ function useFundsInternal(): FundsContextValue {
     [funds],
   );
 
-  const loadFunds = useCallback(async (uid: string, silent = false) => {
-    if (!silent) setIsLoading(true);
-    try {
-      const items = await fetchFunds(uid);
-      setFunds(items);
-    } catch (error) {
-      console.error('Error loading funds:', error);
-      showSnackbar({
-        message: 'Không thể tải danh sách quỹ. Vui lòng thử lại',
-        type: 'error',
-      });
-    } finally {
-      if (!silent) setIsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -214,10 +199,52 @@ function useFundsInternal(): FundsContextValue {
   useEffect(() => {
     if (!userId) {
       setFunds([]);
+      setIsLoading(false);
       return;
     }
-    loadFunds(userId);
-  }, [userId, loadFunds]);
+
+    setIsLoading(true);
+    const q = query(
+      fundsCollection,
+      where('userId', '==', userId),
+      orderBy('createdAt', 'desc'),
+    );
+
+    console.log('[Funds] subscribing for', userId);
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        console.log('[Funds] snapshot fired, size=', snapshot.size, 'fromCache=', snapshot.metadata?.fromCache);
+        const items = snapshot.docs.map((docSnap: QueryDoc) => {
+          const data = docSnap.data() as Record<string, unknown>;
+          return {
+            id: docSnap.id,
+            userId: data.userId as string,
+            name: data.name as string,
+            balance: (data.balance as number) ?? 0,
+            color: data.color as string | undefined,
+            icon: (data.icon as string | null | undefined) ?? undefined,
+            isDefault: data.isDefault as boolean | undefined,
+            goalAmount: (data.goalAmount as number | null | undefined) ?? null,
+            createdAt: (data.createdAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
+            updatedAt: (data.updatedAt as FirebaseFirestoreTypes.Timestamp)?.toDate?.() ?? undefined,
+          };
+        });
+        setFunds(items);
+        setIsLoading(false);
+      },
+      (error) => {
+        console.error('[Funds] snapshot error:', error);
+        showSnackbar({
+          message: 'Không thể tải danh sách quỹ. Vui lòng thử lại',
+          type: 'error',
+        });
+        setIsLoading(false);
+      },
+    );
+
+    return () => unsub();
+  }, [userId]);
 
   const createFund = useCallback(
     async (
@@ -263,7 +290,6 @@ function useFundsInternal(): FundsContextValue {
         } catch {
           // ignore notification errors
         }
-        await loadFunds(userId);
 
         return docRef.id;
       } catch (error) {
@@ -275,7 +301,7 @@ function useFundsInternal(): FundsContextValue {
         return null;
       }
     },
-    [userId, loadFunds, funds],
+    [userId, funds],
   );
 
   const updateFund = useCallback(
@@ -299,7 +325,6 @@ function useFundsInternal(): FundsContextValue {
         });
 
         showSnackbar({ message: 'Đã cập nhật quỹ', type: 'success' });
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error updating fund:', error);
@@ -310,7 +335,7 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, loadFunds],
+    [userId],
   );
 
   const setFundBalance = useCallback(
@@ -353,7 +378,6 @@ function useFundsInternal(): FundsContextValue {
         } catch {
           // ignore notification errors
         }
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error setting fund balance:', error);
@@ -364,7 +388,7 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, loadFunds],
+    [userId, funds, getFundName],
   );
 
   const topUpFund = useCallback(
@@ -399,7 +423,6 @@ function useFundsInternal(): FundsContextValue {
         } catch {
           // ignore notification errors
         }
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error topping up fund:', error);
@@ -410,7 +433,7 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, loadFunds],
+    [userId, funds, getFundName],
   );
 
   /** Chuyển tiền từ quỹ nguồn sang quỹ đích (nạp tiền có chọn nguồn) */
@@ -514,7 +537,6 @@ function useFundsInternal(): FundsContextValue {
         } catch {
           // ignore notification errors
         }
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error transferring to fund:', error);
@@ -525,7 +547,7 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, loadFunds],
+    [userId, funds, getFundName],
   );
 
   const deductFromFund = useCallback(
@@ -626,14 +648,13 @@ function useFundsInternal(): FundsContextValue {
           updatedAt: serverTimestamp(),
         });
 
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error adding to fund:', error);
         throw error;
       }
     },
-    [userId, loadFunds],
+    [userId],
   );
 
   const deleteFund = useCallback(
@@ -701,7 +722,6 @@ function useFundsInternal(): FundsContextValue {
         } catch {
           // ignore notification errors
         }
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error deleting fund:', error);
@@ -712,7 +732,7 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, loadFunds, funds, transferToFund],
+    [userId, funds, transferToFund],
   );
 
   const setDefaultFund = useCallback(
@@ -750,7 +770,6 @@ function useFundsInternal(): FundsContextValue {
           type: 'success',
         });
 
-        await loadFunds(userId);
         return true;
       } catch (error) {
         console.error('Error setting default fund:', error);
@@ -761,23 +780,18 @@ function useFundsInternal(): FundsContextValue {
         return false;
       }
     },
-    [userId, funds, loadFunds],
+    [userId, funds],
   );
 
-  const refresh = useCallback(async () => {
-    if (userId) await loadFunds(userId);
-  }, [userId, loadFunds]);
-
-  const refreshSilent = useCallback(async () => {
-    if (userId) await loadFunds(userId, true);
-  }, [userId, loadFunds]);
+  // refresh là no-op vì onSnapshot luôn giữ funds đồng bộ với Firestore.
+  // Giữ API để các caller cũ không phải đổi.
+  const refresh = useCallback(async () => {}, []);
+  const refreshSilent = useCallback(async () => {}, []);
 
   const ensureDefaultFundAndReload = useCallback(async (): Promise<string | null> => {
     if (!userId) return null;
-    const id = await ensureDefaultFund(userId);
-    await loadFunds(userId);
-    return id;
-  }, [userId, loadFunds]);
+    return ensureDefaultFund(userId);
+  }, [userId]);
 
   const defaultFund = funds.find(f => f.isDefault);
 

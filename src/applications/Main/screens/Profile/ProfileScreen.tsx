@@ -20,6 +20,7 @@ import UserIcon from '../../../../assets/icons/UserIcon';
 import BudgetIcon from '../../../../assets/icons/BudgetIcon';
 import BellIcon from '../../../../assets/icons/BellIcon';
 import WalletIcon from '../../../../assets/icons/WalletIcon';
+import TrashIcon from '../../../../assets/icons/TrashIcon';
 import { AuthStoredUser, clearStoredUser, getStoredUser } from '../../../../services';
 import { confirm } from '../../../../utils/confirm';
 import type { RootStackParamList } from '../../MainScreen';
@@ -109,6 +110,11 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
   const handleOpenBalanceNotifications = () => {
     (navigation.getParent() as { navigate: (name: 'Notifications') => void } | undefined)
       ?.navigate('Notifications');
+  };
+
+  const handleOpenDataManagement = () => {
+    (navigation.getParent() as { navigate: (name: 'DataManagement') => void } | undefined)
+      ?.navigate('DataManagement');
   };
 
   const handleLogout = async () => {
@@ -238,6 +244,12 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ onLogout }) => {
               title="Thông báo số dư"
               subtitle="Theo dõi biến động số dư trong các quỹ"
               onPress={handleOpenBalanceNotifications}
+            />
+            <MenuItem
+              icon={<TrashIcon width={18} height={18} color={colors.text} />}
+              title="Quản lý dữ liệu"
+              subtitle="Dọn dẹp giao dịch cũ theo năm"
+              onPress={handleOpenDataManagement}
             />
           </View>
         </View>

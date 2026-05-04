@@ -163,10 +163,19 @@ const FundManagementScreen: React.FC = () => {
   };
 
   useEffect(() => {
-    if (topUpModalVisible && topUpFundItem && !topUpSourceFundId && defaultFund && defaultFund.id !== topUpFundItem.id) {
+    if (
+      topUpModalVisible &&
+      topUpFundItem &&
+      !topUpSourceFundId &&
+      defaultFund &&
+      defaultFund.id !== topUpFundItem.id &&
+      // Tránh race với effect bên dưới (reset khi balance không đủ): chỉ
+      // auto-pick nếu defaultFund đủ số dư cho lượng đang nhập.
+      (defaultFund.balance ?? 0) >= topUpAmount
+    ) {
       setTopUpSourceFundId(defaultFund.id);
     }
-  }, [topUpModalVisible, topUpFundItem, topUpSourceFundId, defaultFund]);
+  }, [topUpModalVisible, topUpFundItem, topUpSourceFundId, defaultFund, topUpAmount]);
 
   // Nếu quỹ nguồn đang chọn không còn đủ số dư (user vừa nhập số lớn hơn) → bỏ chọn.
   useEffect(() => {
@@ -212,6 +221,10 @@ const FundManagementScreen: React.FC = () => {
           icon: fundIconId,
           goalAmount: hasGoal ? goalAmt : null,
         });
+        // Nếu user chỉnh số dư khác giá trị cũ → ghi nhận biến động qua setFundBalanceRemote.
+        if (Math.round(fundBalance) !== Math.round(editingFund.balance ?? 0)) {
+          await setFundBalanceRemote(editingFund.id, Math.round(fundBalance));
+        }
         setModalVisible(false);
       } else {
         const initialBalance = useSourceFundForInitial ? 0 : fundBalance;
@@ -878,19 +891,25 @@ const FundManagementScreen: React.FC = () => {
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.sheetScrollContent}
           >
-            {!editingFund && (
-              <View style={styles.amountSection}>
-                <Text style={styles.inputLabel}>Số dư ban đầu (đ)</Text>
-                <CurrencyInput
-                  value={fundBalance}
-                  onChange={setFundBalance}
-                  placeholder="0"
-                  inputWrapperStyle={styles.fundAmountInput}
-                  inputStyle={styles.fundAmountText}
-                  suffixStyle={styles.fundAmountSuffix}
-                />
-              </View>
-            )}
+            <View style={styles.amountSection}>
+              <Text style={styles.inputLabel}>
+                {editingFund ? 'Số dư quỹ (đ)' : 'Số dư ban đầu (đ)'}
+              </Text>
+              <CurrencyInput
+                value={fundBalance}
+                onChange={setFundBalance}
+                placeholder="0"
+                inputWrapperStyle={styles.fundAmountInput}
+                inputStyle={styles.fundAmountText}
+                suffixStyle={styles.fundAmountSuffix}
+              />
+              {editingFund && (
+                <Text style={styles.sheetHint}>
+                  Chỉnh trực tiếp số dư hiện tại. Thay đổi sẽ ghi vào lịch sử "Chỉnh số dư quỹ".
+                </Text>
+              )}
+            </View>
+
 
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Tên quỹ</Text>

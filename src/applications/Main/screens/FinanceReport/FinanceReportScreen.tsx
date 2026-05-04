@@ -30,6 +30,7 @@ import {
 } from '@react-native-firebase/firestore';
 import { colors } from '../../../../utils/color';
 import { getStoredUser } from '../../../../services';
+import { getCategoryInfo } from '../../../../utils/categoryUtils';
 import type { MonthSummary } from '../Home/hooks';
 import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
@@ -496,46 +497,6 @@ const FinanceReportScreen: React.FC = () => {
   const prevIncome = prevMonthSummary?.totalIncome ?? 0;
   const prevExpense = prevMonthSummary?.totalExpense ?? 0;
 
-  const {
-    incomeCurrentPct,
-    incomePrevPct,
-    expenseCurrentPct,
-    expensePrevPct,
-  } = useMemo(() => {
-    const maxIncome = Math.max(
-      totalIncome,
-      prevIncome,
-      1,
-    );
-    const maxExpense = Math.max(
-      totalExpense,
-      prevExpense,
-      1,
-    );
-
-    const clamp = (v: number) => Math.max(4, Math.min(100, v || 0));
-
-    return {
-      incomeCurrentPct: clamp(
-        (totalIncome / maxIncome) * 100,
-      ),
-      incomePrevPct: clamp(
-        (prevIncome / maxIncome) * 100,
-      ),
-      expenseCurrentPct: clamp(
-        (totalExpense / maxExpense) * 100,
-      ),
-      expensePrevPct: clamp(
-        (prevExpense / maxExpense) * 100,
-      ),
-    };
-  }, [
-    totalIncome,
-    prevIncome,
-    totalExpense,
-    prevExpense,
-  ]);
-
   const maxYearExpense = useMemo(
     () => Math.max(...yearPoints.map((p) => p.expense), 1),
     [yearPoints],
@@ -657,6 +618,39 @@ const FinanceReportScreen: React.FC = () => {
     () => totalExpense - prevExpense,
     [totalExpense, prevExpense],
   );
+
+  const expenseDiffPct = useMemo(() => {
+    if (prevExpense === 0 && totalExpense === 0) return 0;
+    if (prevExpense === 0) return 100;
+    if (totalExpense === 0) return -100;
+    return Math.round((expenseDiff / prevExpense) * 100);
+  }, [expenseDiff, prevExpense, totalExpense]);
+
+  /** Đối chiếu chi tiêu từng danh mục giữa tháng này và tháng trước, sort theo |delta| desc. */
+  const categoryComparisons = useMemo(() => {
+    const thisByCat = new Map<string, number>();
+    const prevByCat = new Map<string, number>();
+    expenseByCategory.forEach((c) => thisByCat.set(c.categoryId, c.amount));
+    (prevMonthSummary?.expenseByCategory ?? []).forEach((c) =>
+      prevByCat.set(c.categoryId, c.amount),
+    );
+
+    const allIds = new Set<string>([...thisByCat.keys(), ...prevByCat.keys()]);
+    const items = Array.from(allIds).map((id) => {
+      const cur = thisByCat.get(id) ?? 0;
+      const pre = prevByCat.get(id) ?? 0;
+      const delta = cur - pre;
+      let pct: number;
+      if (pre === 0 && cur === 0) pct = 0;
+      else if (pre === 0) pct = 100;
+      else if (cur === 0) pct = -100;
+      else pct = Math.round((delta / pre) * 100);
+      return { categoryId: id, current: cur, previous: pre, delta, pct };
+    });
+    return items
+      .filter((it) => it.delta !== 0)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  }, [expenseByCategory, prevMonthSummary]);
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -899,102 +893,108 @@ const FinanceReportScreen: React.FC = () => {
         </View>
 
         <View style={styles.sectionCard}>
-          <Text style={styles.sectionTitle}>So sánh với tháng trước</Text>
+          <Text style={styles.sectionTitle}>So với tháng trước</Text>
+          <Text style={styles.compareCatSubtitle}>Đối chiếu chi tiêu theo danh mục</Text>
 
-          <View style={styles.compareRow}>
-            <View style={styles.compareLabels}>
-              <Text style={styles.compareLabel}>Thu nhập</Text>
+          <View style={styles.compareKpiRow}>
+            <View style={[styles.compareKpiCard, styles.compareKpiThisMonth]}>
+              <Text style={styles.compareKpiLabel}>THÁNG NÀY</Text>
+              <Text style={[styles.compareKpiValue, { color: colors.error }]}>
+                {totalExpense.toLocaleString('vi-VN')}đ
+              </Text>
             </View>
-            <View style={styles.compareBars}>
-              <View style={styles.compareBarRow}>
-                <Text style={styles.compareBarText}>Tháng này</Text>
-                <View style={styles.compareBarTrack}>
-                  <View
-                    style={[
-                      styles.compareBarFill,
-                      styles.compareBarThisMonth,
-                      { width: `${incomeCurrentPct}%` },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.compareBarValue}>
-                  {totalIncome.toLocaleString('vi-VN')}đ
-                </Text>
-              </View>
-              <View style={styles.compareBarRow}>
-                <Text style={styles.compareBarText}>Tháng trước</Text>
-                <View style={styles.compareBarTrack}>
-                  <View
-                    style={[
-                      styles.compareBarFill,
-                      styles.compareBarPrevMonth,
-                      { width: `${incomePrevPct}%` },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.compareBarValue}>
-                  {prevIncome.toLocaleString('vi-VN')}đ
-                </Text>
-              </View>
+            <View style={styles.compareKpiCard}>
+              <Text style={styles.compareKpiLabel}>THÁNG TRƯỚC</Text>
+              <Text style={styles.compareKpiValue}>
+                {prevExpense.toLocaleString('vi-VN')}đ
+              </Text>
             </View>
           </View>
 
-          <View style={styles.expenseDiffRow}>
-            <Text style={styles.expenseDiffLabel}>Tổng chi tiêu</Text>
+          <View
+            style={[
+              styles.compareDeltaPill,
+              expenseDiff < 0
+                ? styles.compareDeltaPillDown
+                : expenseDiff > 0
+                ? styles.compareDeltaPillUp
+                : styles.compareDeltaPillFlat,
+            ]}
+          >
             <Text
               style={[
-                styles.expenseDiffValue,
+                styles.compareDeltaText,
                 {
                   color:
-                    expenseDiff <= 0 ? colors.success : colors.error,
+                    expenseDiff < 0
+                      ? colors.success
+                      : expenseDiff > 0
+                      ? colors.error
+                      : colors.textSecondary,
                 },
               ]}
             >
               {expenseDiff === 0
                 ? 'Bằng tháng trước'
-                : expenseDiff < 0
-                ? `Ít hơn ${Math.abs(expenseDiff).toLocaleString('vi-VN')}đ so với tháng trước`
-                : `Nhiều hơn ${expenseDiff.toLocaleString('vi-VN')}đ so với tháng trước`}
+                : `${expenseDiff < 0 ? '↓ −' : '↑ +'}${Math.abs(
+                    expenseDiff,
+                  ).toLocaleString('vi-VN')}đ (${
+                    expenseDiffPct < 0 ? '−' : expenseDiffPct > 0 ? '+' : ''
+                  }${Math.abs(expenseDiffPct)}% so với tháng trước)`}
             </Text>
           </View>
 
-          <View style={[styles.compareRow, { marginTop: 16 }]}>
-            <View style={styles.compareLabels}>
-              <Text style={styles.compareLabel}>Chi tiêu</Text>
-            </View>
-            <View style={styles.compareBars}>
-              <View style={styles.compareBarRow}>
-                <Text style={styles.compareBarText}>Tháng này</Text>
-                <View style={styles.compareBarTrack}>
+          <Text style={styles.compareTopHeader}>TOP THAY ĐỔI</Text>
+          {categoryComparisons.length === 0 ? (
+            <Text style={styles.compareEmptyHint}>
+              Không có thay đổi giữa hai tháng.
+            </Text>
+          ) : (
+            categoryComparisons.slice(0, 4).map((item) => {
+              const info = getCategoryInfo(item.categoryId, 'expense');
+              const Icon = info.icon;
+              const delta = item.delta;
+              const deltaColor = delta < 0 ? colors.success : colors.error;
+              const arrow = delta < 0 ? '↓' : '↑';
+              const sign = delta < 0 ? '−' : '+';
+              const pctSign = item.pct < 0 ? '−' : item.pct > 0 ? '+' : '';
+              return (
+                <TouchableOpacity
+                  key={item.categoryId}
+                  style={styles.compareCatRow}
+                  activeOpacity={0.7}
+                  onPress={() => handleCategoryDetail(item.categoryId)}
+                >
                   <View
                     style={[
-                      styles.compareBarFill,
-                      styles.compareBarThisMonthExpense,
-                      { width: `${expenseCurrentPct}%` },
+                      styles.compareCatIcon,
+                      { backgroundColor: info.color + '20' },
                     ]}
-                  />
-                </View>
-                <Text style={styles.compareBarValue}>
-                  {totalExpense.toLocaleString('vi-VN')}đ
-                </Text>
-              </View>
-              <View style={styles.compareBarRow}>
-                <Text style={styles.compareBarText}>Tháng trước</Text>
-                <View style={styles.compareBarTrack}>
-                  <View
-                    style={[
-                      styles.compareBarFill,
-                      styles.compareBarPrevMonthExpense,
-                      { width: `${expensePrevPct}%` },
-                    ]}
-                  />
-                </View>
-                <Text style={styles.compareBarValue}>
-                  {prevExpense.toLocaleString('vi-VN')}đ
-                </Text>
-              </View>
-            </View>
-          </View>
+                  >
+                    <Icon width={18} height={18} color={info.color} />
+                  </View>
+                  <View style={styles.compareCatTextWrap}>
+                    <Text style={styles.compareCatName} numberOfLines={1}>
+                      {info.name}
+                    </Text>
+                    <Text style={styles.compareCatPrev}>
+                      Tháng trước {item.previous.toLocaleString('vi-VN')}đ
+                    </Text>
+                  </View>
+                  <View style={styles.compareCatRight}>
+                    <Text style={styles.compareCatCurrent}>
+                      {item.current.toLocaleString('vi-VN')}đ
+                    </Text>
+                    <Text style={[styles.compareCatDelta, { color: deltaColor }]}>
+                      {arrow} {sign}
+                      {Math.abs(delta).toLocaleString('vi-VN')}đ ({pctSign}
+                      {Math.abs(item.pct)}%)
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
 
           {isPrevLoading && (
             <Text style={styles.compareHint}>Đang tải số liệu tháng trước...</Text>
@@ -1494,83 +1494,115 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 1,
   },
-  compareRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginTop: 8,
-  },
-  compareLabels: {
-    width: 80,
-    paddingTop: 8,
-  },
-  compareLabel: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  compareBars: {
-    flex: 1,
-    gap: 8,
-  },
-  compareBarRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  compareBarText: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    width: 70,
-  },
-  compareBarTrack: {
-    flex: 1,
-    height: 10,
-    borderRadius: 6,
-    backgroundColor: colors.backgroundSecondary,
-    overflow: 'hidden',
-    marginHorizontal: 8,
-  },
-  compareBarFill: {
-    height: '100%',
-    borderRadius: 6,
-  },
-  compareBarThisMonth: {
-    backgroundColor: colors.success,
-  },
-  compareBarPrevMonth: {
-    backgroundColor: colors.success + '60',
-  },
-  compareBarThisMonthExpense: {
-    backgroundColor: colors.error,
-  },
-  compareBarPrevMonthExpense: {
-    backgroundColor: colors.error + '60',
-  },
-  compareBarValue: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.text,
-    minWidth: 80,
-    textAlign: 'right',
-  },
   compareHint: {
     marginTop: 10,
     fontSize: 12,
     color: colors.textSecondary,
     textAlign: 'right',
   },
-  expenseDiffRow: {
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: colors.backgroundSecondary,
-  },
-  expenseDiffLabel: {
-    fontSize: 13,
+  compareCatSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
     color: colors.textSecondary,
+    marginBottom: 14,
+  },
+  compareKpiRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  compareKpiCard: {
+    flex: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: colors.backgroundSecondary,
+  },
+  compareKpiThisMonth: {
+    backgroundColor: colors.error + '15',
+  },
+  compareKpiLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.4,
     marginBottom: 4,
   },
-  expenseDiffValue: {
+  compareKpiValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  compareDeltaPill: {
+    marginTop: 12,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+  },
+  compareDeltaPillDown: {
+    backgroundColor: colors.success + '15',
+  },
+  compareDeltaPillUp: {
+    backgroundColor: colors.error + '15',
+  },
+  compareDeltaPillFlat: {
+    backgroundColor: colors.backgroundSecondary,
+  },
+  compareDeltaText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  compareTopHeader: {
+    marginTop: 18,
+    marginBottom: 8,
+    fontSize: 11,
+    fontWeight: '800',
+    color: colors.textSecondary,
+    letterSpacing: 0.6,
+  },
+  compareEmptyHint: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    paddingVertical: 8,
+  },
+  compareCatRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    gap: 10,
+  },
+  compareCatIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  compareCatTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  compareCatName: {
     fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  compareCatPrev: {
+    marginTop: 2,
+    fontSize: 11,
+    color: colors.textSecondary,
+  },
+  compareCatRight: {
+    alignItems: 'flex-end',
+  },
+  compareCatCurrent: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: colors.text,
+  },
+  compareCatDelta: {
+    marginTop: 2,
+    fontSize: 11,
     fontWeight: '700',
   },
   yearChart: {

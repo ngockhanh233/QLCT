@@ -1,10 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, Image, StyleSheet, Dimensions } from 'react-native';
-import {
-  getStoredUser,
-  ensureUserProfile,
-  maybeResetUserTransactionsYearly,
-} from '../../services';
+import { getStoredUser, ensureUserProfile } from '../../services';
 
 const { width } = Dimensions.get('window');
 
@@ -21,10 +17,8 @@ const SplashScreen: React.FC<SplashScreenProps> = ({ onFinish }) => {
         if (stored?.uid) {
           try {
             await ensureUserProfile(stored);
-            // maybeResetUserTransactionsYearly: năm đã dọn ưu tiên AsyncStorage, không có mới đọc Firestore
-            await maybeResetUserTransactionsYearly(stored.uid);
           } catch (resetError) {
-            console.warn('Error ensure profile / yearly reset:', resetError);
+            console.warn('Error ensure profile:', resetError);
           }
         }
 

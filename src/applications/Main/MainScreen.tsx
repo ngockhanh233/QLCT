@@ -9,7 +9,7 @@ import { DebtsProvider } from '../../contexts/DebtsContext';
 import { BalanceVisibilityProvider } from '../../contexts/BalanceVisibilityContext';
 import { FundsProvider } from './screens/FundManagement/hooks/useFunds';
 import BottomTabNavigator from './BottomTabNavigator';
-import { AddTransactionScreen, DefaultFundSetupScreen, FinanceReportScreen, FundManagementScreen, IncomeSourcesScreen, NotificationsScreen } from './screens';
+import { AddTransactionScreen, DataManagementScreen, DefaultFundSetupScreen, FinanceReportScreen, FundManagementScreen, IncomeSourcesScreen, NotificationsScreen } from './screens';
 import DebtsScreen from './screens/Debts/DebtsScreen';
 import DebtDetailScreen from './screens/Debts/DebtDetailScreen';
 import SpendingCategoryDetailScreen from './screens/SpendingCategoryDetail/SpendingCategoryDetailScreen';
@@ -44,6 +44,7 @@ export type RootStackParamList = {
     | undefined;
   FundManagement: undefined;
   IncomeSources: undefined;
+  DataManagement: undefined;
   Debts: undefined;
   DebtDetail: { debtId: string };
 };
@@ -59,6 +60,7 @@ const linking: LinkingOptions<RootStackParamList> = {
       Notifications: 'notifications',
       FundManagement: 'fund-management',
       IncomeSources: 'income-sources',
+      DataManagement: 'data-management',
       Debts: 'debts',
       DebtDetail: 'debts/:debtId',
     },
@@ -185,6 +187,14 @@ const MainScreen: React.FC<MainScreenProps> = ({ onLogout }) => {
                 <Stack.Screen
                   name="IncomeSources"
                   component={IncomeSourcesScreen}
+                  options={{
+                    presentation: 'card',
+                    animation: 'slide_from_right',
+                  }}
+                />
+                <Stack.Screen
+                  name="DataManagement"
+                  component={DataManagementScreen}
                   options={{
                     presentation: 'card',
                     animation: 'slide_from_right',

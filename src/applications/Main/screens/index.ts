@@ -8,3 +8,4 @@ export { FundManagementScreen } from './FundManagement';
 export { NotificationsScreen } from './Notifications';
 export { DefaultFundSetupScreen } from './DefaultFundSetup';
 export { default as IncomeSourcesScreen } from './IncomeSources/IncomeSourcesScreen';
+export { DataManagementScreen } from './DataManagement';

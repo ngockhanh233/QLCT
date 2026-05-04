@@ -7,6 +7,7 @@ import {
   where,
   getDocs,
   getDoc,
+  onSnapshot,
   orderBy,
   FirebaseFirestoreTypes,
   doc,
@@ -104,83 +105,51 @@ function getRangeForTimeFilter(
   return { start, end };
 }
 
-async function fetchAllTransactions(
-  userId: string,
+function getDateRange(
   timeFilter: TransactionTimeFilter,
   dateFilterMode: DateFilterMode,
   fromDate: Date | null,
   toDate: Date | null,
-): Promise<{ items: TransactionRecord[] }> {
-  let start: Date;
-  let end: Date;
-
+): { start: Date; end: Date } {
   if (dateFilterMode === 'single' && fromDate) {
-    start = startOfDay(fromDate);
-    end = endOfDay(fromDate);
-  } else if (dateFilterMode === 'range' && fromDate && toDate) {
+    return { start: startOfDay(fromDate), end: endOfDay(fromDate) };
+  }
+  if (dateFilterMode === 'range' && fromDate && toDate) {
     const from = fromDate < toDate ? fromDate : toDate;
     const to = toDate > fromDate ? toDate : fromDate;
-    start = startOfDay(from);
-    end = endOfDay(to);
-  } else {
-    // Không có filter ngày tùy chọn → dùng timeFilter + ngày hiện tại
-    const now = new Date();
-    const range = getRangeForTimeFilter(timeFilter, now);
-    start = range.start;
-    end = range.end;
+    return { start: startOfDay(from), end: endOfDay(to) };
   }
+  return getRangeForTimeFilter(timeFilter, new Date());
+}
 
-  const q = query(
-    transactionsCollection,
-    where('userId', '==', userId),
-    where('transactionDate', '>=', start),
-    where('transactionDate', '<=', end),
-    orderBy('transactionDate', 'desc'),
-  );
-
-  const snapshot = await getDocs(q);
-  console.log(
-    '[Firestore] Transaction.fetchAllTransactions size=',
-    snapshot.size,
-    'mode=',
-    dateFilterMode,
-    'timeFilter=',
-    timeFilter,
-  );
-
-  const items: TransactionRecord[] = snapshot.docs.map((docSnap: QueryDoc) => {
-    const data = docSnap.data() as any;
-    const ts = data.transactionDate as
-      | FirebaseFirestoreTypes.Timestamp
-      | Date
-      | undefined;
-
-    const date =
-      ts instanceof Date
-        ? ts
-        : ts && 'toDate' in ts
-        ? (ts as FirebaseFirestoreTypes.Timestamp).toDate()
-        : new Date();
-
-    return {
-      id: docSnap.id,
-      userId: data.userId,
-      categoryId: data.categoryId,
-      amount: data.amount,
-      type: data.type,
-      note: data.note ?? undefined,
-      fundId: data.fundId ?? undefined,
-      transactionDate: date,
-      isSplitIncome: data.isSplitIncome === true,
-      incomeSplits:
-        (data.incomeSplits as { fundId: string; amount: number }[] | undefined) ??
-        null,
-      isLoanMovement: data.isLoanMovement === true,
-      debtId: (data.debtId as string | undefined) ?? null,
-    };
-  });
-
-  return { items };
+function mapTransactionDoc(docSnap: QueryDoc): TransactionRecord {
+  const data = docSnap.data() as any;
+  const ts = data.transactionDate as
+    | FirebaseFirestoreTypes.Timestamp
+    | Date
+    | undefined;
+  const date =
+    ts instanceof Date
+      ? ts
+      : ts && 'toDate' in ts
+      ? (ts as FirebaseFirestoreTypes.Timestamp).toDate()
+      : new Date();
+  return {
+    id: docSnap.id,
+    userId: data.userId,
+    categoryId: data.categoryId,
+    amount: data.amount,
+    type: data.type,
+    note: data.note ?? undefined,
+    fundId: data.fundId ?? undefined,
+    transactionDate: date,
+    isSplitIncome: data.isSplitIncome === true,
+    incomeSplits:
+      (data.incomeSplits as { fundId: string; amount: number }[] | undefined) ??
+      null,
+    isLoanMovement: data.isLoanMovement === true,
+    debtId: (data.debtId as string | undefined) ?? null,
+  };
 }
 
 export const useTransactions = () => {
@@ -194,32 +163,6 @@ export const useTransactions = () => {
   const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isInitialized, setIsInitialized] = useState(false);
-
-  const reloadForUser = useCallback(
-    async (uid: string) => {
-      setIsRefreshing(true);
-      try {
-        const res = await fetchAllTransactions(
-          uid,
-          timeFilter,
-          dateFilterMode,
-          fromDate,
-          toDate,
-        );
-        setTransactions(res.items);
-      } catch (error) {
-        console.error('Error loading transactions:', error);
-        showSnackbar({
-          message: 'Không thể tải giao dịch. Vui lòng thử lại',
-          type: 'error',
-        });
-      } finally {
-        setIsRefreshing(false);
-        setIsInitialized(true);
-      }
-    },
-    [timeFilter, dateFilterMode, fromDate, toDate],
-  );
 
   // Load userId from AsyncStorage
   useEffect(() => {
@@ -243,20 +186,49 @@ export const useTransactions = () => {
     };
   }, []);
 
-  // Initial load & when userId changes
+  // Subscribe realtime: re-bind khi userId hoặc filter ngày thay đổi.
   useEffect(() => {
     if (!userId) {
       setTransactions([]);
+      setIsInitialized(true);
       return;
     }
 
-    reloadForUser(userId);
-  }, [userId, reloadForUser]);
+    const { start, end } = getDateRange(timeFilter, dateFilterMode, fromDate, toDate);
+    const q = query(
+      transactionsCollection,
+      where('userId', '==', userId),
+      where('transactionDate', '>=', start),
+      where('transactionDate', '<=', end),
+      orderBy('transactionDate', 'desc'),
+    );
 
-  const refresh = useCallback(async () => {
-    if (!userId) return;
-    await reloadForUser(userId);
-  }, [userId, reloadForUser]);
+    console.log('[Tx] subscribing for', userId, 'range=', start.toISOString(), '→', end.toISOString());
+    setIsRefreshing(true);
+    const unsub = onSnapshot(
+      q,
+      (snapshot) => {
+        console.log('[Tx] snapshot fired, size=', snapshot.size, 'fromCache=', snapshot.metadata?.fromCache);
+        setTransactions(snapshot.docs.map(mapTransactionDoc));
+        setIsRefreshing(false);
+        setIsInitialized(true);
+      },
+      (error) => {
+        console.error('[Tx] snapshot error:', error);
+        showSnackbar({
+          message: 'Không thể tải giao dịch. Vui lòng thử lại',
+          type: 'error',
+        });
+        setIsRefreshing(false);
+        setIsInitialized(true);
+      },
+    );
+
+    return () => unsub();
+  }, [userId, timeFilter, dateFilterMode, fromDate, toDate]);
+
+  // refresh là no-op vì onSnapshot tự cập nhật. Giữ API để caller cũ không phải đổi.
+  const refresh = useCallback(async () => {}, []);
 
   const deleteTransaction = useCallback(
     async (
