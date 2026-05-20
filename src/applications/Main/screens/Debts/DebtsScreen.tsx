@@ -25,13 +25,18 @@ import { useFunds } from '../FundManagement/hooks/useFunds';
 import { useDebts } from '../../../../contexts/DebtsContext';
 import {
   debtRemaining,
+  debtTotalPaid,
+  debtTotalDue,
   type DebtDirection,
   type DebtRecord,
 } from '../../../../services/debts';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
 import type { RootStackParamList } from '../../MainScreen';
 
-type TabKey = 'lent' | 'borrowed';
+type TabKey = 'lent' | 'borrowed' | 'installment';
+
+const INSTALLMENT_COLOR = '#F59E0B';
+const INSTALLMENT_TEXT_COLOR = '#B45309';
 
 const DebtsScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
@@ -75,6 +80,8 @@ const DebtsScreen: React.FC = () => {
     return d;
   });
   const [formNote, setFormNote] = useState('');
+  const [formInterest, setFormInterest] = useState(0);
+  const [showFormInterest, setShowFormInterest] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   // Repay modal
@@ -84,6 +91,8 @@ const DebtsScreen: React.FC = () => {
   const [repayFundId, setRepayFundId] = useState<string>('');
   const [repayDate, setRepayDate] = useState<Date>(new Date());
   const [repayNote, setRepayNote] = useState('');
+  const [repayInterest, setRepayInterest] = useState(0);
+  const [showRepayInterest, setShowRepayInterest] = useState(false);
   const [isRepaying, setIsRepaying] = useState(false);
 
   // Delete debt modal
@@ -131,6 +140,8 @@ const DebtsScreen: React.FC = () => {
     d.setDate(d.getDate() + 30);
     setFormDueDate(d);
     setFormNote('');
+    setFormInterest(0);
+    setShowFormInterest(false);
     setCreateVisible(true);
   };
 
@@ -149,7 +160,8 @@ const DebtsScreen: React.FC = () => {
       showSnackbar({ type: 'error', message: 'Vui lòng nhập số tiền' });
       return;
     }
-    if (!formFundId) {
+    const isInstallment = formDirection === 'installment';
+    if (!isInstallment && !formFundId) {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
@@ -159,16 +171,23 @@ const DebtsScreen: React.FC = () => {
         direction: formDirection,
         counterparty: name,
         principal: formPrincipal,
-        fundId: formFundId,
+        fundId: isInstallment ? null : formFundId,
         startDate: formStartDate,
         dueDate: formDueEnabled ? formDueDate : null,
         note: formNote.trim() || null,
+        ...(isInstallment && showFormInterest && formInterest > 0
+          ? { initialInterest: formInterest }
+          : {}),
       });
       setCreateVisible(false);
       showSnackbar({
         type: 'success',
         message:
-          formDirection === 'lent' ? 'Đã ghi nhận khoản cho vay' : 'Đã ghi nhận khoản vay',
+          formDirection === 'lent'
+            ? 'Đã ghi nhận khoản cho vay'
+            : formDirection === 'installment'
+            ? 'Đã ghi nhận khoản trả góp'
+            : 'Đã ghi nhận khoản vay',
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Không thể lưu khoản nợ';
@@ -182,15 +201,21 @@ const DebtsScreen: React.FC = () => {
     const remaining = debtRemaining(debt);
     setRepayDebt(debt);
     setRepayAmount(remaining);
+    const isInstallmentDebt = debt.direction === 'installment';
     const originalExists =
       !!debt.fundId && funds.some((f) => f.id === debt.fundId);
+    // Trả góp không lưu fundId trên debt → luôn dùng quỹ mặc định.
     setRepayFundId(
-      originalExists
+      isInstallmentDebt
+        ? defaultFund?.id || fundsDefaultFirst[0]?.id || ''
+        : originalExists
         ? debt.fundId!
         : defaultFund?.id || fundsDefaultFirst[0]?.id || '',
     );
     setRepayDate(new Date());
     setRepayNote('');
+    setRepayInterest(0);
+    setShowRepayInterest(false);
     setRepayVisible(true);
   };
 
@@ -231,6 +256,11 @@ const DebtsScreen: React.FC = () => {
         fundId: repayFundId,
         date: repayDate,
         note: repayNote.trim() || null,
+        ...(repayDebt.direction === 'installment' &&
+        showRepayInterest &&
+        repayInterest > 0
+          ? { interestAmount: repayInterest }
+          : {}),
       });
       setRepayVisible(false);
       setRepayDebt(null);
@@ -266,7 +296,8 @@ const DebtsScreen: React.FC = () => {
   const handleConfirmDeleteDebt = async () => {
     if (!deleteDebtTarget) return;
     const rem = debtRemaining(deleteDebtTarget);
-    if (rem > 0 && !deleteDebtFundId) {
+    const isInstallmentTarget = deleteDebtTarget.direction === 'installment';
+    if (!isInstallmentTarget && rem > 0 && !deleteDebtFundId) {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
@@ -274,7 +305,7 @@ const DebtsScreen: React.FC = () => {
     try {
       await deleteDebt(
         deleteDebtTarget.id,
-        rem > 0
+        !isInstallmentTarget && rem > 0
           ? {
               refundFundId: deleteDebtFundId,
               offsetSourceFundId: deleteDebtOffsetId || undefined,
@@ -293,12 +324,38 @@ const DebtsScreen: React.FC = () => {
 
   const renderCard = (debt: DebtRecord) => {
     const remaining = debtRemaining(debt);
-    const totalPaid = debt.principal - remaining;
-    const pct = debt.principal > 0 ? Math.min(100, (totalPaid / debt.principal) * 100) : 0;
+    const totalPaid = debtTotalPaid(debt);
+    const totalDue = debtTotalDue(debt);
+    const pct = totalDue > 0 ? Math.min(100, (totalPaid / totalDue) * 100) : 0;
     const fund = funds.find((f) => f.id === debt.fundId);
     const isSettled = debt.status === 'settled';
     const isLent = debt.direction === 'lent';
-    const accentColor = isLent ? colors.success : colors.error;
+    const isInstallmentDebt = debt.direction === 'installment';
+    const accentColor = isLent
+      ? colors.success
+      : isInstallmentDebt
+      ? INSTALLMENT_COLOR
+      : colors.error;
+    const directionLabel = isLent
+      ? 'Cho vay'
+      : isInstallmentDebt
+      ? 'Trả góp'
+      : 'Đi vay';
+    const directionBadgeBg = isLent
+      ? colors.success + '20'
+      : isInstallmentDebt
+      ? INSTALLMENT_COLOR + '20'
+      : '#FEE2E2';
+    const directionBadgeText = isLent
+      ? colors.success
+      : isInstallmentDebt
+      ? INSTALLMENT_TEXT_COLOR
+      : '#B91C1C';
+    const swipeActionText = isLent
+      ? 'Thu'
+      : isInstallmentDebt
+      ? 'Trả góp'
+      : 'Trả';
 
     // Trạng thái hạn trả: chỉ tính khi chưa tất toán và có dueDate.
     let dueStatus: 'today' | 'overdue' | null = null;
@@ -316,7 +373,7 @@ const DebtsScreen: React.FC = () => {
         <SwipeableRow
           onEdit={() => setEditDebtTarget(debt)}
           onSecondary={!isSettled ? () => openRepay(debt) : undefined}
-          secondaryText={isLent ? 'Thu' : 'Trả'}
+          secondaryText={swipeActionText}
           secondaryButtonColor={accentColor}
           onDelete={() => openDeleteDebt(debt)}
           deleteText="Xóa"
@@ -335,20 +392,13 @@ const DebtsScreen: React.FC = () => {
               <View
                 style={[
                   styles.statusBadge,
-                  {
-                    backgroundColor: isLent
-                      ? colors.success + '20'
-                      : '#FEE2E2',
-                  },
+                  { backgroundColor: directionBadgeBg },
                 ]}
               >
                 <Text
-                  style={[
-                    styles.statusOpenText,
-                    { color: isLent ? colors.success : '#B91C1C' },
-                  ]}
+                  style={[styles.statusOpenText, { color: directionBadgeText }]}
                 >
-                  {isLent ? 'Cho vay' : 'Đi vay'}
+                  {directionLabel}
                 </Text>
               </View>
               {isSettled && (
@@ -373,9 +423,9 @@ const DebtsScreen: React.FC = () => {
                 </Text>
               </View>
               <View style={styles.amountBlock}>
-                <Text style={styles.amountLabel}>Gốc</Text>
+                <Text style={styles.amountLabel}>Đã trả</Text>
                 <Text style={styles.amountPrincipal}>
-                  {remaining.toLocaleString('vi-VN')}đ
+                  {totalPaid.toLocaleString('vi-VN')}đ
                 </Text>
               </View>
             </View>
@@ -420,7 +470,8 @@ const DebtsScreen: React.FC = () => {
 
             {!!debt.repayments.length && (
               <Text style={styles.repayCount}>
-                {debt.repayments.length} lần {isLent ? 'thu' : 'trả'} •{' '}
+                {debt.repayments.length} lần{' '}
+                {isLent ? 'thu' : isInstallmentDebt ? 'trả góp' : 'trả'} •{' '}
                 {totalPaid.toLocaleString('vi-VN')}đ
               </Text>
             )}
@@ -462,8 +513,29 @@ const DebtsScreen: React.FC = () => {
   };
 
   const total =
-    tab === 'lent' ? totalsByDirection.lent : totalsByDirection.borrowed;
-  const tabAccent = tab === 'lent' ? colors.success : colors.error;
+    tab === 'lent'
+      ? totalsByDirection.lent
+      : tab === 'installment'
+      ? totalsByDirection.installment
+      : totalsByDirection.borrowed;
+  const tabAccent =
+    tab === 'lent'
+      ? colors.success
+      : tab === 'installment'
+      ? INSTALLMENT_COLOR
+      : colors.error;
+  const totalLabel =
+    tab === 'lent'
+      ? 'Tổng phải thu'
+      : tab === 'installment'
+      ? 'Tổng còn trả góp'
+      : 'Tổng phải trả';
+  const footerLabel =
+    tab === 'lent'
+      ? '+ Ghi nhận cho vay'
+      : tab === 'installment'
+      ? '+ Ghi nhận trả góp'
+      : '+ Ghi nhận đi vay';
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
@@ -528,12 +600,27 @@ const DebtsScreen: React.FC = () => {
             Phải trả
           </Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[
+            styles.tabItem,
+            tab === 'installment' && styles.tabItemActiveInstallment,
+          ]}
+          onPress={() => setTab('installment')}
+          activeOpacity={0.8}
+        >
+          <Text
+            style={[
+              styles.tabText,
+              tab === 'installment' && styles.tabTextActive,
+            ]}
+          >
+            Trả góp
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <View style={[styles.totalBox, { backgroundColor: tabAccent + '12' }]}>
-        <Text style={styles.totalLabel}>
-          {tab === 'lent' ? 'Tổng phải thu' : 'Tổng phải trả'}
-        </Text>
+        <Text style={styles.totalLabel}>{totalLabel}</Text>
         <Text style={[styles.totalAmount, { color: tabAccent }]}>
           {total.toLocaleString('vi-VN')}đ
         </Text>
@@ -565,6 +652,8 @@ const DebtsScreen: React.FC = () => {
                   ? 'Không tìm thấy'
                   : tab === 'lent'
                   ? 'Chưa có khoản cho vay'
+                  : tab === 'installment'
+                  ? 'Chưa có khoản trả góp'
                   : 'Chưa có khoản vay'}
               </Text>
               <Text style={styles.emptySubtitle}>
@@ -583,9 +672,7 @@ const DebtsScreen: React.FC = () => {
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + 12 }]}>
         <TouchableOpacity style={styles.createBtn} onPress={openCreate} activeOpacity={0.85}>
-          <Text style={styles.createBtnText}>
-            {tab === 'lent' ? '+ Ghi nhận cho vay' : '+ Ghi nhận đi vay'}
-          </Text>
+          <Text style={styles.createBtnText}>{footerLabel}</Text>
         </TouchableOpacity>
       </View>
 
@@ -641,16 +728,42 @@ const DebtsScreen: React.FC = () => {
                   Đi vay
                 </Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.directionItem,
+                  formDirection === 'installment' &&
+                    styles.directionItemActiveInstallment,
+                ]}
+                onPress={() => setFormDirection('installment')}
+                activeOpacity={0.8}
+              >
+                <Text
+                  style={[
+                    styles.directionText,
+                    formDirection === 'installment' && styles.directionTextActive,
+                  ]}
+                >
+                  Trả góp
+                </Text>
+              </TouchableOpacity>
             </View>
 
             <Text style={styles.inputLabel}>
-              {formDirection === 'lent' ? 'Người vay' : 'Người cho vay'}
+              {formDirection === 'lent'
+                ? 'Người vay'
+                : formDirection === 'installment'
+                ? 'Bên cho trả góp'
+                : 'Người cho vay'}
             </Text>
             <TextInput
               style={styles.textInput}
               value={formCounterparty}
               onChangeText={setFormCounterparty}
-              placeholder="VD: Anh iu Khánh"
+              placeholder={
+                formDirection === 'installment'
+                  ? 'VD: Home Credit, FE Credit...'
+                  : 'VD: Anh iu Khánh'
+              }
               placeholderTextColor={colors.textLight}
             />
 
@@ -664,18 +777,66 @@ const DebtsScreen: React.FC = () => {
               suffixStyle={styles.amountInputSuffix}
             />
 
-            <Text style={styles.inputLabel}>
-              {formDirection === 'lent' ? 'Quỹ trừ tiền' : 'Quỹ nhận tiền'}
-            </Text>
-            <FundPicker
-              funds={fundsDefaultFirst}
-              selectedFundId={formFundId}
-              onSelect={setFormFundId}
-              isDisabled={(f) =>
-                formDirection === 'lent' && (f.balance ?? 0) < formPrincipal
-              }
-              disabledReason={() => 'Không đủ'}
-            />
+            {formDirection !== 'installment' && (
+              <>
+                <Text style={styles.inputLabel}>
+                  {formDirection === 'lent' ? 'Quỹ trừ tiền' : 'Quỹ nhận tiền'}
+                </Text>
+                <FundPicker
+                  funds={fundsDefaultFirst}
+                  selectedFundId={formFundId}
+                  onSelect={setFormFundId}
+                  isDisabled={(f) =>
+                    formDirection === 'lent' && (f.balance ?? 0) < formPrincipal
+                  }
+                  disabledReason={() => 'Không đủ'}
+                />
+              </>
+            )}
+            {/* {formDirection === 'installment' && (
+              <Text style={styles.modalHint}>
+                Trả góp không tạo dòng tiền vào quỹ. Khi đến kỳ trả, vuốt
+                trái để chọn quỹ và ghi nhận số tiền trả.
+              </Text>
+            )} */}
+
+            {formDirection === 'installment' &&
+              (showFormInterest ? (
+                <>
+                  <View style={styles.interestFieldHeader}>
+                    <Text style={styles.inputLabel}>Tiền lãi</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setShowFormInterest(false);
+                        setFormInterest(0);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.interestRemoveText}>Bỏ</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <CurrencyInput
+                    value={formInterest}
+                    onChange={setFormInterest}
+                    placeholder="0"
+                    inputWrapperStyle={styles.amountInputWrap}
+                    inputStyle={styles.amountInputText}
+                    suffixStyle={styles.amountInputSuffix}
+                  />
+                  <Text style={styles.repayInterestHint}>
+                    Lãi cộng vào tổng cần trả, không trừ thêm từ quỹ.
+                  </Text>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={styles.addInterestInlineBtn}
+                  onPress={() => setShowFormInterest(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.addInterestInlineText}>+ Thêm lãi</Text>
+                </TouchableOpacity>
+              ))}
 
             <Text style={styles.inputLabel}>Ngày ghi nhận</Text>
             <DatePicker value={formStartDate} onChange={setFormStartDate} />
@@ -748,7 +909,11 @@ const DebtsScreen: React.FC = () => {
               keyboardShouldPersistTaps="handled"
             >
               <Text style={styles.modalTitle}>
-                {repayDebt.direction === 'lent' ? 'Ghi nhận thu tiền' : 'Ghi nhận trả nợ'}
+                {repayDebt.direction === 'lent'
+                  ? 'Ghi nhận thu tiền'
+                  : repayDebt.direction === 'installment'
+                  ? 'Ghi nhận trả góp'
+                  : 'Ghi nhận trả nợ'}
               </Text>
               <Text style={styles.modalSubtitle}>
                 {repayDebt.counterparty} • Còn lại{' '}
@@ -773,11 +938,49 @@ const DebtsScreen: React.FC = () => {
                 selectedFundId={repayFundId}
                 onSelect={setRepayFundId}
                 isDisabled={(f) =>
-                  repayDebt.direction === 'borrowed' &&
+                  repayDebt.direction !== 'lent' &&
                   (f.balance ?? 0) < repayAmount
                 }
                 disabledReason={() => 'Không đủ'}
               />
+
+              {repayDebt.direction === 'installment' &&
+                (showRepayInterest ? (
+                  <>
+                    <View style={styles.interestFieldHeader}>
+                      <Text style={styles.inputLabel}>Tiền lãi kỳ này</Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setShowRepayInterest(false);
+                          setRepayInterest(0);
+                        }}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.interestRemoveText}>Bỏ</Text>
+                      </TouchableOpacity>
+                    </View>
+                    <CurrencyInput
+                      value={repayInterest}
+                      onChange={setRepayInterest}
+                      placeholder="0"
+                      inputWrapperStyle={styles.amountInputWrap}
+                      inputStyle={styles.amountInputText}
+                      suffixStyle={styles.amountInputSuffix}
+                    />
+                    <Text style={styles.repayInterestHint}>
+                      Lãi cộng vào tổng cần trả, không trừ thêm từ quỹ.
+                    </Text>
+                  </>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.addInterestInlineBtn}
+                    onPress={() => setShowRepayInterest(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.addInterestInlineText}>+ Thêm lãi</Text>
+                  </TouchableOpacity>
+                ))}
 
               <Text style={styles.inputLabel}>Ngày</Text>
               <DatePicker value={repayDate} onChange={setRepayDate} />
@@ -830,11 +1033,14 @@ const DebtsScreen: React.FC = () => {
         <View style={styles.modalContentCenter}>
           {deleteDebtTarget && (() => {
             const isLent = deleteDebtTarget.direction === 'lent';
+            const isInstallmentTarget = deleteDebtTarget.direction === 'installment';
             const rem = debtRemaining(deleteDebtTarget);
             const primaryFund = funds.find((f) => f.id === deleteDebtFundId);
             const primaryBalance = primaryFund?.balance ?? 0;
-            const needsOffset = !isLent && rem > 0 && primaryBalance < rem;
+            const needsOffset =
+              !isLent && !isInstallmentTarget && rem > 0 && primaryBalance < rem;
             const deficit = needsOffset ? rem - primaryBalance : 0;
+            const showFundPickers = !isInstallmentTarget && rem > 0;
 
             return (
               <ScrollView
@@ -843,12 +1049,14 @@ const DebtsScreen: React.FC = () => {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
-                <Text style={styles.modalTitle}>Xóa khoản nợ</Text>
+                <Text style={styles.modalTitle}>
+                  {isInstallmentTarget ? 'Xóa khoản trả góp' : 'Xóa khoản nợ'}
+                </Text>
                 <Text style={styles.modalSubtitle}>
                   {deleteDebtTarget.counterparty} •{' '}
                   {rem > 0 ? (
                     <>
-                      Chưa thanh toán{' '}
+                      {isInstallmentTarget ? 'Còn nợ ' : 'Chưa thanh toán '}
                       <Text style={styles.modalRefundAmount}>
                         {rem.toLocaleString('vi-VN')}đ
                       </Text>
@@ -858,7 +1066,7 @@ const DebtsScreen: React.FC = () => {
                   )}
                 </Text>
 
-                {rem > 0 && (
+                {showFundPickers && (
                   <>
                     <Text style={styles.modalHint}>
                       Các giao dịch đã trả/thu trước đó được giữ nguyên trong quỹ.
@@ -905,7 +1113,15 @@ const DebtsScreen: React.FC = () => {
                   </>
                 )}
 
-                {rem === 0 && (
+                {isInstallmentTarget && (
+                  <Text style={styles.modalHint}>
+                    Xóa khoản trả góp khỏi danh sách. Các giao dịch trả đã ghi
+                    nhận trước đó vẫn giữ nguyên ở quỹ tương ứng — số dư các quỹ
+                    không đổi.
+                  </Text>
+                )}
+
+                {!isInstallmentTarget && rem === 0 && (
                   <Text style={styles.modalHint}>
                     Xóa khoản nợ này khỏi danh sách. Các giao dịch liên kết cũng bị xóa.
                   </Text>
@@ -929,7 +1145,9 @@ const DebtsScreen: React.FC = () => {
                 (() => {
                   if (!deleteDebtTarget) return { opacity: 0.5 };
                   const isLent = deleteDebtTarget.direction === 'lent';
+                  const isInst = deleteDebtTarget.direction === 'installment';
                   const rem = debtRemaining(deleteDebtTarget);
+                  if (isInst) return null;
                   if (rem > 0 && !deleteDebtFundId) return { opacity: 0.5 };
                   if (rem > 0 && !isLent) {
                     const primary = funds.find((f) => f.id === deleteDebtFundId);
@@ -944,7 +1162,9 @@ const DebtsScreen: React.FC = () => {
                 if (isDeletingDebt) return true;
                 if (!deleteDebtTarget) return true;
                 const isLent = deleteDebtTarget.direction === 'lent';
+                const isInst = deleteDebtTarget.direction === 'installment';
                 const rem = debtRemaining(deleteDebtTarget);
+                if (isInst) return false;
                 if (rem > 0 && !deleteDebtFundId) return true;
                 if (rem > 0 && !isLent) {
                   const primary = funds.find((f) => f.id === deleteDebtFundId);
@@ -972,7 +1192,11 @@ const DebtsScreen: React.FC = () => {
         subtitle={
           editDebtTarget
             ? `${editDebtTarget.counterparty} • ${
-                editDebtTarget.direction === 'lent' ? 'Cho vay' : 'Đi vay'
+                editDebtTarget.direction === 'lent'
+                  ? 'Cho vay'
+                  : editDebtTarget.direction === 'installment'
+                  ? 'Trả góp'
+                  : 'Đi vay'
               } • ${editDebtTarget.principal.toLocaleString('vi-VN')}đ`
             : undefined
         }
@@ -1066,6 +1290,7 @@ const styles = StyleSheet.create({
   },
   tabItemActiveLent: { backgroundColor: '#22C55E' },
   tabItemActiveBorrowed: { backgroundColor: '#EF4444' },
+  tabItemActiveInstallment: { backgroundColor: '#F59E0B' },
   tabText: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
   tabTextActive: { color: colors.white },
   totalBox: {
@@ -1200,6 +1425,37 @@ const styles = StyleSheet.create({
   modalBodyContent: { paddingBottom: 10, gap: 10 },
   modalTitle: { fontSize: 16, fontWeight: '900', color: colors.text },
   modalSubtitle: { fontSize: 13, color: colors.textSecondary },
+  interestFieldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  interestRemoveText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.error,
+  },
+  repayInterestHint: {
+    fontSize: 12,
+    color: '#B45309',
+    fontStyle: 'italic',
+    marginTop: -2,
+  },
+  addInterestInlineBtn: {
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    backgroundColor: '#F59E0B' + '08',
+    marginTop: 2,
+  },
+  addInterestInlineText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#B45309',
+  },
   directionToggle: {
     flexDirection: 'row',
     backgroundColor: colors.backgroundSecondary,
@@ -1214,6 +1470,7 @@ const styles = StyleSheet.create({
   },
   directionItemActiveLent: { backgroundColor: '#22C55E' },
   directionItemActiveBorrowed: { backgroundColor: '#EF4444' },
+  directionItemActiveInstallment: { backgroundColor: '#F59E0B' },
   directionText: { fontSize: 15, fontWeight: '600', color: colors.textSecondary },
   directionTextActive: { color: colors.white },
   inputLabel: { fontSize: 13, fontWeight: '700', color: colors.text, marginTop: 4 },

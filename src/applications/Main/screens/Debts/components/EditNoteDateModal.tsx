@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import Modal from 'react-native-modal';
 import { colors } from '../../../../../utils/color';
-import { DatePicker, TimePicker } from '../../../../../components';
+import { DatePicker, TimePicker, CurrencyInput } from '../../../../../components';
 import { showSnackbar } from '../../../../../utils/snackbar';
 
 interface EditNoteDateModalProps {
@@ -21,7 +21,14 @@ interface EditNoteDateModalProps {
   hint?: string;
   initialNote: string;
   initialDate: Date;
-  onSave: (note: string | null, date: Date) => Promise<void>;
+  /** Khi truyền, modal hiển thị thêm field "Số tiền" và truyền vào onSave. */
+  initialAmount?: number;
+  amountLabel?: string;
+  onSave: (
+    note: string | null,
+    date: Date,
+    amount?: number,
+  ) => Promise<void>;
   successMessage?: string;
 }
 
@@ -33,19 +40,24 @@ const EditNoteDateModal: React.FC<EditNoteDateModalProps> = ({
   hint,
   initialNote,
   initialDate,
+  initialAmount,
+  amountLabel = 'Số tiền',
   onSave,
   successMessage = 'Đã cập nhật',
 }) => {
   const [note, setNote] = useState(initialNote);
   const [date, setDate] = useState<Date>(initialDate);
+  const [amount, setAmount] = useState<number>(initialAmount ?? 0);
   const [isSaving, setIsSaving] = useState(false);
+  const showAmount = initialAmount !== undefined;
 
   useEffect(() => {
     if (visible) {
       setNote(initialNote);
       setDate(initialDate);
+      setAmount(initialAmount ?? 0);
     }
-  }, [visible, initialNote, initialDate]);
+  }, [visible, initialNote, initialDate, initialAmount]);
 
   const handleClose = () => {
     if (isSaving) return;
@@ -53,9 +65,17 @@ const EditNoteDateModal: React.FC<EditNoteDateModalProps> = ({
   };
 
   const handleSave = async () => {
+    if (showAmount && amount <= 0) {
+      showSnackbar({ message: 'Vui lòng nhập số tiền', type: 'error' });
+      return;
+    }
     setIsSaving(true);
     try {
-      await onSave(note.trim() ? note.trim() : null, date);
+      await onSave(
+        note.trim() ? note.trim() : null,
+        date,
+        showAmount ? amount : undefined,
+      );
       showSnackbar({ message: successMessage, type: 'success' });
       onClose();
     } catch (e) {
@@ -83,6 +103,20 @@ const EditNoteDateModal: React.FC<EditNoteDateModalProps> = ({
           <Text style={styles.title}>{title}</Text>
           {subtitle ? <Text style={styles.subtitle}>{subtitle}</Text> : null}
           {hint ? <Text style={styles.hint}>{hint}</Text> : null}
+
+          {showAmount && (
+            <>
+              <Text style={styles.label}>{amountLabel}</Text>
+              <CurrencyInput
+                value={amount}
+                onChange={setAmount}
+                placeholder="0"
+                inputWrapperStyle={styles.amountWrap}
+                inputStyle={styles.amountText}
+                suffixStyle={styles.amountSuffix}
+              />
+            </>
+          )}
 
           <Text style={styles.label}>Ghi chú</Text>
           <TextInput
@@ -193,6 +227,16 @@ const styles = StyleSheet.create({
     color: colors.text,
     textAlignVertical: 'top',
   },
+  amountWrap: {
+    backgroundColor: colors.white,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  amountText: { fontSize: 18, fontWeight: '800', color: colors.text },
+  amountSuffix: { fontSize: 14, fontWeight: '800', color: colors.textSecondary },
   dateRow: {
     flexDirection: 'row',
     gap: 12,

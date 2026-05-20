@@ -13,12 +13,15 @@ import {
   createDebt,
   addDebtRepayment,
   addDebtBorrow,
+  addDebtInterest,
   deleteDebt,
   deleteDebtRepayment,
   deleteDebtBorrow,
+  deleteDebtInterest,
   updateDebtNoteAndStartDate,
   updateDebtRepayment,
   updateDebtBorrow,
+  updateDebtInterest,
   debtRemaining,
   type DebtRecord,
   type DebtDirection,
@@ -28,12 +31,14 @@ import { useHomeDataChanged } from './HomeDataChangedContext';
 type CreateDebtInput = Parameters<typeof createDebt>[1];
 type AddRepaymentInput = Parameters<typeof addDebtRepayment>[2];
 type AddBorrowInput = Parameters<typeof addDebtBorrow>[2];
+type AddInterestInput = Parameters<typeof addDebtInterest>[2];
 type DeleteRepaymentOpts = Parameters<typeof deleteDebtRepayment>[3];
 type DeleteBorrowOpts = Parameters<typeof deleteDebtBorrow>[3];
 type DeleteDebtOpts = Parameters<typeof deleteDebt>[2];
 type UpdateDebtNoteAndDateInput = Parameters<typeof updateDebtNoteAndStartDate>[2];
 type UpdateRepaymentNoteAndDateInput = Parameters<typeof updateDebtRepayment>[3];
 type UpdateBorrowNoteAndDateInput = Parameters<typeof updateDebtBorrow>[3];
+type UpdateInterestInput = Parameters<typeof updateDebtInterest>[3];
 
 type DebtsContextValue = {
   debts: DebtRecord[];
@@ -42,6 +47,7 @@ type DebtsContextValue = {
   createDebt: (input: CreateDebtInput) => Promise<string | null>;
   addRepayment: (debtId: string, input: AddRepaymentInput) => Promise<boolean>;
   addBorrow: (debtId: string, input: AddBorrowInput) => Promise<boolean>;
+  addInterest: (debtId: string, input: AddInterestInput) => Promise<boolean>;
   deleteRepayment: (
     debtId: string,
     repaymentId: string,
@@ -52,6 +58,7 @@ type DebtsContextValue = {
     borrowId: string,
     opts?: DeleteBorrowOpts,
   ) => Promise<boolean>;
+  deleteInterest: (debtId: string, interestId: string) => Promise<boolean>;
   deleteDebt: (debtId: string, opts?: DeleteDebtOpts) => Promise<boolean>;
   updateDebtNoteAndDate: (
     debtId: string,
@@ -67,7 +74,12 @@ type DebtsContextValue = {
     borrowId: string,
     input: UpdateBorrowNoteAndDateInput,
   ) => Promise<boolean>;
-  totalsByDirection: { lent: number; borrowed: number };
+  updateInterest: (
+    debtId: string,
+    interestId: string,
+    input: UpdateInterestInput,
+  ) => Promise<boolean>;
+  totalsByDirection: { lent: number; borrowed: number; installment: number };
 };
 
 const DebtsContext = createContext<DebtsContextValue | null>(null);
@@ -161,6 +173,55 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
         return true;
       } catch (error) {
         console.error('Error adding debt borrow:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const addInterestCb = useCallback(
+    async (debtId: string, input: AddInterestInput): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await addDebtInterest(userId, debtId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error adding debt interest:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const updateInterestCb = useCallback(
+    async (
+      debtId: string,
+      interestId: string,
+      input: UpdateInterestInput,
+    ): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await updateDebtInterest(userId, debtId, interestId, input);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error updating debt interest:', error);
+        throw error;
+      }
+    },
+    [userId, afterMutation],
+  );
+
+  const deleteInterestCb = useCallback(
+    async (debtId: string, interestId: string): Promise<boolean> => {
+      if (!userId) return false;
+      try {
+        await deleteDebtInterest(userId, debtId, interestId);
+        await afterMutation();
+        return true;
+      } catch (error) {
+        console.error('Error deleting debt interest:', error);
         throw error;
       }
     },
@@ -279,14 +340,16 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
   const totalsByDirection = useMemo(() => {
     let lent = 0;
     let borrowed = 0;
+    let installment = 0;
     for (const d of debts) {
       if (d.status !== 'open') continue;
       const remaining = debtRemaining(d);
       if (remaining <= 0) continue;
       if (d.direction === 'lent') lent += remaining;
+      else if (d.direction === 'installment') installment += remaining;
       else borrowed += remaining;
     }
-    return { lent, borrowed };
+    return { lent, borrowed, installment };
   }, [debts]);
 
   const value: DebtsContextValue = {
@@ -296,12 +359,15 @@ const DebtsProviderInternal: React.FC<{ children: ReactNode }> = ({ children }) 
     createDebt: createDebtCb,
     addRepayment: addRepaymentCb,
     addBorrow: addBorrowCb,
+    addInterest: addInterestCb,
     deleteRepayment: deleteRepaymentCb,
     deleteBorrow: deleteBorrowCb,
+    deleteInterest: deleteInterestCb,
     deleteDebt: deleteDebtCb,
     updateDebtNoteAndDate: updateDebtNoteAndDateCb,
     updateRepaymentNoteAndDate: updateRepaymentNoteAndDateCb,
     updateBorrowNoteAndDate: updateBorrowNoteAndDateCb,
+    updateInterest: updateInterestCb,
     totalsByDirection,
   };
 
@@ -322,13 +388,16 @@ export function useDebts(): DebtsContextValue {
       createDebt: async () => null,
       addRepayment: async () => false,
       addBorrow: async () => false,
+      addInterest: async () => false,
       deleteRepayment: async () => false,
       deleteBorrow: async () => false,
+      deleteInterest: async () => false,
       deleteDebt: async () => false,
       updateDebtNoteAndDate: async () => false,
       updateRepaymentNoteAndDate: async () => false,
       updateBorrowNoteAndDate: async () => false,
-      totalsByDirection: { lent: 0, borrowed: 0 },
+      updateInterest: async () => false,
+      totalsByDirection: { lent: 0, borrowed: 0, installment: 0 },
     };
   }
   return ctx;

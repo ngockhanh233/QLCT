@@ -24,8 +24,10 @@ import { useDebts } from '../../../../contexts/DebtsContext';
 import {
   debtRemaining,
   debtTotalBorrowed,
+  debtTotalInterest,
   type DebtRepayment,
   type DebtBorrow,
+  type DebtInterest,
 } from '../../../../services/debts';
 import EditNoteDateModal from './components/EditNoteDateModal';
 import { getFundIconComponent } from '../../../../constants/FundIconConstants';
@@ -44,11 +46,14 @@ const DebtDetailScreen: React.FC = () => {
     debts,
     addRepayment,
     addBorrow,
+    addInterest,
     deleteDebt,
     deleteRepayment,
     deleteBorrow,
+    deleteInterest,
     updateRepaymentNoteAndDate,
     updateBorrowNoteAndDate,
+    updateInterest,
   } = useDebts();
 
   const debt = useMemo(() => debts.find((d) => d.id === debtId), [debts, debtId]);
@@ -67,6 +72,8 @@ const DebtDetailScreen: React.FC = () => {
   const [repayFundId, setRepayFundId] = useState<string>('');
   const [repayDate, setRepayDate] = useState<Date>(new Date());
   const [repayNote, setRepayNote] = useState('');
+  const [repayInterest, setRepayInterest] = useState(0);
+  const [showRepayInterest, setShowRepayInterest] = useState(false);
   const [isRepaying, setIsRepaying] = useState(false);
 
   const [borrowVisible, setBorrowVisible] = useState(false);
@@ -81,10 +88,25 @@ const DebtDetailScreen: React.FC = () => {
     message: string;
   }>({ visible: false, title: 'Lỗi', message: '' });
 
+  // History tab: 'history' (repay + borrow) | 'interest' (manual interest entries)
+  const [historyTab, setHistoryTab] = useState<'history' | 'interest'>('history');
+
   // Edit repayment modal state
   const [editRepayTarget, setEditRepayTarget] = useState<DebtRepayment | null>(null);
   // Edit borrow modal state
   const [editBorrowTarget, setEditBorrowTarget] = useState<DebtBorrow | null>(null);
+
+  // Interest add/edit modal state — shared one modal, mode-driven
+  const [interestModalVisible, setInterestModalVisible] = useState(false);
+  const [interestEditTarget, setInterestEditTarget] = useState<DebtInterest | null>(null);
+  const [interestAmount, setInterestAmount] = useState(0);
+  const [interestDate, setInterestDate] = useState<Date>(new Date());
+  const [interestNote, setInterestNote] = useState('');
+  const [isSavingInterest, setIsSavingInterest] = useState(false);
+
+  // Delete interest confirmation
+  const [deleteInterestTarget, setDeleteInterestTarget] = useState<DebtInterest | null>(null);
+  const [isDeletingInterest, setIsDeletingInterest] = useState(false);
 
   // Delete repayment modal state
   const [deleteRepayVisible, setDeleteRepayVisible] = useState(false);
@@ -126,6 +148,8 @@ const DebtDetailScreen: React.FC = () => {
     );
     setRepayDate(new Date());
     setRepayNote('');
+    setRepayInterest(0);
+    setShowRepayInterest(false);
     setRepayVisible(true);
   }, [debt, funds, defaultFund, fundsDefaultFirst]);
 
@@ -165,6 +189,11 @@ const DebtDetailScreen: React.FC = () => {
         fundId: repayFundId,
         date: repayDate,
         note: repayNote.trim() || null,
+        ...(debt.direction === 'installment' &&
+        showRepayInterest &&
+        repayInterest > 0
+          ? { interestAmount: repayInterest }
+          : {}),
       });
       setRepayVisible(false);
       showSnackbar({ type: 'success', message: 'Đã ghi nhận' });
@@ -202,7 +231,8 @@ const DebtDetailScreen: React.FC = () => {
       showSnackbar({ type: 'error', message: 'Vui lòng nhập số tiền' });
       return;
     }
-    if (!borrowFundId) {
+    const isInstallmentBorrow = debt.direction === 'installment';
+    if (!isInstallmentBorrow && !borrowFundId) {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
@@ -210,7 +240,7 @@ const DebtDetailScreen: React.FC = () => {
     try {
       await addBorrow(debt.id, {
         amount: borrowAmount,
-        fundId: borrowFundId,
+        fundId: isInstallmentBorrow ? null : borrowFundId,
         date: borrowDate,
         note: borrowNote.trim() || null,
       });
@@ -220,6 +250,8 @@ const DebtDetailScreen: React.FC = () => {
         message:
           debt.direction === 'lent'
             ? 'Đã ghi nhận cho vay thêm'
+            : isInstallmentBorrow
+            ? 'Đã ghi nhận mua thêm'
             : 'Đã ghi nhận vay thêm',
       });
     } catch (e) {
@@ -254,8 +286,9 @@ const DebtDetailScreen: React.FC = () => {
   const handleConfirmDeleteDebt = async () => {
     if (!debt) return;
     const remaining = debtRemaining(debt);
-    // Nếu remaining=0 thì không cần fund. Ngược lại bắt buộc phải chọn.
-    if (remaining > 0 && !deleteDebtFundId) {
+    const isInstallmentTarget = debt.direction === 'installment';
+    // Nếu remaining=0 hoặc là trả góp thì không cần fund.
+    if (!isInstallmentTarget && remaining > 0 && !deleteDebtFundId) {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
@@ -263,7 +296,7 @@ const DebtDetailScreen: React.FC = () => {
     try {
       await deleteDebt(
         debt.id,
-        remaining > 0
+        !isInstallmentTarget && remaining > 0
           ? {
               refundFundId: deleteDebtFundId,
               offsetSourceFundId: deleteDebtOffsetId || undefined,
@@ -339,18 +372,95 @@ const DebtDetailScreen: React.FC = () => {
     setDeleteBorrowOffsetId('');
   }, [isDeletingBorrow]);
 
+  const openAddInterest = useCallback(() => {
+    setInterestEditTarget(null);
+    setInterestAmount(0);
+    setInterestDate(new Date());
+    setInterestNote('');
+    setInterestModalVisible(true);
+  }, []);
+
+  const openEditInterest = useCallback((target: DebtInterest) => {
+    setInterestEditTarget(target);
+    setInterestAmount(target.amount);
+    setInterestDate(target.date);
+    setInterestNote(target.note ?? '');
+    setInterestModalVisible(true);
+  }, []);
+
+  const closeInterestModal = useCallback(() => {
+    if (isSavingInterest) return;
+    setInterestModalVisible(false);
+    setInterestEditTarget(null);
+  }, [isSavingInterest]);
+
+  const handleSaveInterest = async () => {
+    if (!debt) return;
+    if (interestAmount <= 0) {
+      showSnackbar({ type: 'error', message: 'Vui lòng nhập số tiền lãi' });
+      return;
+    }
+    setIsSavingInterest(true);
+    try {
+      if (interestEditTarget) {
+        await updateInterest(debt.id, interestEditTarget.id, {
+          amount: interestAmount,
+          date: interestDate,
+          note: interestNote.trim() || null,
+        });
+        showSnackbar({ type: 'success', message: 'Đã cập nhật lãi' });
+      } else {
+        await addInterest(debt.id, {
+          amount: interestAmount,
+          date: interestDate,
+          note: interestNote.trim() || null,
+        });
+        showSnackbar({ type: 'success', message: 'Đã ghi nhận lãi' });
+      }
+      setInterestModalVisible(false);
+      setInterestEditTarget(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Không thể lưu';
+      setErrorPopup({ visible: true, title: 'Lỗi', message: msg });
+    } finally {
+      setIsSavingInterest(false);
+    }
+  };
+
+  const handleConfirmDeleteInterest = async () => {
+    if (!debt || !deleteInterestTarget) return;
+    setIsDeletingInterest(true);
+    try {
+      await deleteInterest(debt.id, deleteInterestTarget.id);
+      setDeleteInterestTarget(null);
+      showSnackbar({ type: 'success', message: 'Đã xóa khoản lãi' });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Không thể xóa';
+      setErrorPopup({ visible: true, title: 'Lỗi', message: msg });
+    } finally {
+      setIsDeletingInterest(false);
+    }
+  };
+
   const handleConfirmDeleteBorrow = async () => {
     if (!debt || !deleteBorrowTarget) return;
-    if (!deleteBorrowFundId) {
+    const isInstallmentBorrow = debt.direction === 'installment';
+    if (!isInstallmentBorrow && !deleteBorrowFundId) {
       showSnackbar({ type: 'error', message: 'Vui lòng chọn quỹ' });
       return;
     }
     setIsDeletingBorrow(true);
     try {
-      await deleteBorrow(debt.id, deleteBorrowTarget.id, {
-        refundFundId: deleteBorrowFundId,
-        offsetSourceFundId: deleteBorrowOffsetId || undefined,
-      });
+      await deleteBorrow(
+        debt.id,
+        deleteBorrowTarget.id,
+        isInstallmentBorrow
+          ? undefined
+          : {
+              refundFundId: deleteBorrowFundId,
+              offsetSourceFundId: deleteBorrowOffsetId || undefined,
+            },
+      );
       closeDeleteBorrow();
       showSnackbar({ type: 'success', message: 'Đã xóa' });
     } catch (e) {
@@ -387,12 +497,44 @@ const DebtDetailScreen: React.FC = () => {
 
   const remaining = debtRemaining(debt);
   const totalBorrowed = debtTotalBorrowed(debt);
-  const totalPaid = totalBorrowed - remaining;
-  const pct =
-    totalBorrowed > 0 ? Math.min(100, (totalPaid / totalBorrowed) * 100) : 0;
+  const totalInterest = debtTotalInterest(debt);
+  const totalDue = totalBorrowed + totalInterest;
+  const totalPaid = totalDue - remaining;
+  const pct = totalDue > 0 ? Math.min(100, (totalPaid / totalDue) * 100) : 0;
   const isSettled = debt.status === 'settled';
   const isLent = debt.direction === 'lent';
-  const accentColor = isLent ? colors.success : colors.error;
+  const isInstallmentDebt = debt.direction === 'installment';
+  const INSTALLMENT_COLOR = '#F59E0B';
+  const accentColor = isLent
+    ? colors.success
+    : isInstallmentDebt
+    ? INSTALLMENT_COLOR
+    : colors.error;
+  const directionLabel = isLent
+    ? 'Cho vay'
+    : isInstallmentDebt
+    ? 'Trả góp'
+    : 'Đi vay';
+  const remainingLabel = isLent
+    ? 'Còn phải thu'
+    : isInstallmentDebt
+    ? 'Còn phải trả góp'
+    : 'Còn phải trả';
+  const paidStatLabel = isLent
+    ? 'Đã thu'
+    : isInstallmentDebt
+    ? 'Đã trả góp'
+    : 'Đã trả';
+  const borrowBtnLabel = isLent
+    ? '+ Cho vay thêm'
+    : isInstallmentDebt
+    ? '+ Thêm lãi'
+    : '+ Vay thêm';
+  const repayBtnLabel = isLent
+    ? 'Ghi nhận thu tiền'
+    : isInstallmentDebt
+    ? 'Ghi nhận trả góp'
+    : 'Ghi nhận trả nợ';
   const fund = funds.find((f) => f.id === debt.fundId);
 
   type TimelineItem =
@@ -458,7 +600,7 @@ const DebtDetailScreen: React.FC = () => {
                   ]}
                 >
                   <Text style={[styles.badgeText, { color: accentColor }]}>
-                    {isLent ? 'Cho vay' : 'Đi vay'}
+                    {directionLabel}
                   </Text>
                 </View>
                 {isSettled && (
@@ -480,9 +622,7 @@ const DebtDetailScreen: React.FC = () => {
             ) : (
               <>
                 <View style={styles.heroAmountWrap}>
-                  <Text style={styles.heroAmountLabel}>
-                    {isLent ? 'Còn phải thu' : 'Còn phải trả'}
-                  </Text>
+                  <Text style={styles.heroAmountLabel}>{remainingLabel}</Text>
                   <Text style={[styles.heroAmountValue, { color: accentColor }]}>
                     {remaining.toLocaleString('vi-VN')}đ
                   </Text>
@@ -514,12 +654,24 @@ const DebtDetailScreen: React.FC = () => {
             <View style={styles.heroStatBlock}>
               <Text style={styles.heroStatLabel}>Gốc</Text>
               <Text style={styles.heroStatValue}>
-                {remaining.toLocaleString('vi-VN')}đ
+                {totalBorrowed.toLocaleString('vi-VN')}đ
               </Text>
             </View>
             <View style={styles.heroStatDivider} />
             <View style={styles.heroStatBlock}>
-              <Text style={styles.heroStatLabel}>{isLent ? 'Đã thu' : 'Đã trả'}</Text>
+              <Text style={styles.heroStatLabel}>Lãi</Text>
+              <Text
+                style={[
+                  styles.heroStatValue,
+                  { color: totalInterest > 0 ? '#B45309' : colors.text },
+                ]}
+              >
+                {totalInterest.toLocaleString('vi-VN')}đ
+              </Text>
+            </View>
+            <View style={styles.heroStatDivider} />
+            <View style={styles.heroStatBlock}>
+              <Text style={styles.heroStatLabel}>{paidStatLabel}</Text>
               <Text style={[styles.heroStatValue, { color: colors.primary }]}>
                 {totalPaid.toLocaleString('vi-VN')}đ
               </Text>
@@ -570,19 +722,162 @@ const DebtDetailScreen: React.FC = () => {
           )}
         </View>
 
-        {/* Lịch sử (gộp trả/thu + vay thêm) */}
+        {/* Tab bar: Lịch sử | Tiền lãi */}
         <View style={styles.historySection}>
-          <View style={styles.sectionTitleRow}>
-            <View
-              style={[styles.sectionAccentBar, { backgroundColor: accentColor }]}
-            />
-            <Text style={styles.sectionTitle}>Lịch sử</Text>
-            <View style={styles.sectionCountBadge}>
-              <Text style={styles.sectionCountBadgeText}>{timeline.length}</Text>
-            </View>
+          <View style={styles.historyTabBar}>
+            <TouchableOpacity
+              style={[
+                styles.historyTabItem,
+                historyTab === 'history' && styles.historyTabItemActive,
+                historyTab === 'history' && { borderBottomColor: accentColor },
+              ]}
+              onPress={() => setHistoryTab('history')}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.historyTabText,
+                  historyTab === 'history' && {
+                    color: accentColor,
+                    fontWeight: '900',
+                  },
+                ]}
+              >
+                Lịch sử
+              </Text>
+              <View style={styles.historyTabCountBadge}>
+                <Text style={styles.historyTabCountText}>{timeline.length}</Text>
+              </View>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.historyTabItem,
+                historyTab === 'interest' && styles.historyTabItemActive,
+                historyTab === 'interest' && { borderBottomColor: accentColor },
+              ]}
+              onPress={() => setHistoryTab('interest')}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.historyTabText,
+                  historyTab === 'interest' && {
+                    color: accentColor,
+                    fontWeight: '900',
+                  },
+                ]}
+              >
+                Tiền lãi
+              </Text>
+              <View style={styles.historyTabCountBadge}>
+                <Text style={styles.historyTabCountText}>
+                  {debt.interestEntries.length}
+                </Text>
+              </View>
+            </TouchableOpacity>
           </View>
 
-          {timeline.length === 0 ? (
+          {historyTab === 'interest' ? (
+            <>
+              {!isInstallmentDebt && (
+                <TouchableOpacity
+                  style={[styles.addInterestInlineBtn, { marginBottom: 12 }]}
+                  onPress={openAddInterest}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.addInterestInlineText}>+ Thêm lãi</Text>
+                </TouchableOpacity>
+              )}
+
+              {totalInterest > 0 && (
+                <View style={styles.interestSummaryRow}>
+                  <Text style={styles.interestSummaryLabel}>Tổng lãi</Text>
+                  <Text style={styles.interestSummaryAmount}>
+                    {totalInterest.toLocaleString('vi-VN')}đ
+                  </Text>
+                </View>
+              )}
+
+              {debt.interestEntries.length === 0 ? (
+                <View style={styles.historyEmpty}>
+                  <Text style={styles.historyEmptyText}>
+                    {isInstallmentDebt
+                      ? 'Chưa có khoản lãi nào. Bấm "+ Thêm lãi" ở dưới để ghi nhận.'
+                      : 'Chưa có khoản lãi nào. Bấm "+ Thêm lãi" ở trên để ghi nhận.'}
+                  </Text>
+                </View>
+              ) : (
+                <View style={styles.historyList}>
+                  {[...debt.interestEntries]
+                    .sort((a, b) => b.date.getTime() - a.date.getTime())
+                    .map((it) => (
+                      <View key={it.id} style={styles.historyItemWrapper}>
+                        <SwipeableRow
+                          onEdit={() => openEditInterest(it)}
+                          onDelete={() => setDeleteInterestTarget(it)}
+                          deleteText="Xóa"
+                          borderRadius={14}
+                          buttonWidth={70}
+                        >
+                          <View style={styles.historyItem}>
+                            <View
+                              style={[
+                                styles.historyAccentBar,
+                                { backgroundColor: '#F59E0B' },
+                              ]}
+                            />
+                            <View style={styles.historyContent}>
+                              <View style={styles.historyTopRow}>
+                                <View
+                                  style={[
+                                    styles.historyIndex,
+                                    { backgroundColor: '#F59E0B' + '15' },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.historyIndexText,
+                                      { color: '#B45309' },
+                                    ]}
+                                  >
+                                    Lãi
+                                  </Text>
+                                </View>
+                                <Text
+                                  style={[
+                                    styles.historyAmount,
+                                    { color: '#B45309' },
+                                  ]}
+                                >
+                                  +{it.amount.toLocaleString('vi-VN')}đ
+                                </Text>
+                              </View>
+                              <View style={styles.historyMetaRow}>
+                                <View style={styles.historyMetaChip}>
+                                  <CalendarIcon
+                                    width={12}
+                                    height={12}
+                                    color={colors.textSecondary}
+                                  />
+                                  <Text style={styles.historyMetaText}>
+                                    {it.date.toLocaleDateString('vi-VN')}
+                                  </Text>
+                                </View>
+                              </View>
+                              {it.note && (
+                                <Text style={styles.historyNote} numberOfLines={2}>
+                                  {it.note}
+                                </Text>
+                              )}
+                            </View>
+                          </View>
+                        </SwipeableRow>
+                      </View>
+                    ))}
+                </View>
+              )}
+            </>
+          ) : timeline.length === 0 ? (
             <View style={styles.historyEmpty}>
               <Text style={styles.historyEmptyText}>Chưa có giao dịch nào</Text>
             </View>
@@ -592,19 +887,29 @@ const DebtDetailScreen: React.FC = () => {
                 const isBorrow = item.kind === 'borrow';
                 const itemFund = funds.find((f) => f.id === item.data.fundId);
                 // Màu hiển thị theo loại giao dịch (income xanh, expense đỏ).
-                // Borrow: lent → expense (đỏ), borrowed → income (xanh).
-                // Repay: lent → income (xanh), borrowed → expense (đỏ).
+                // Borrow: lent → expense (đỏ), borrowed → income (xanh), installment → cam (không cash flow).
+                // Repay: lent → income (xanh), borrowed/installment → expense (đỏ).
                 const isIncomeForUser = isBorrow ? !isLent : isLent;
-                const itemColor = isIncomeForUser
+                const itemColor = isInstallmentDebt && isBorrow
+                  ? INSTALLMENT_COLOR
+                  : isIncomeForUser
                   ? colors.success
                   : colors.error;
-                const sign = isIncomeForUser ? '+' : '−';
+                const sign = isInstallmentDebt && isBorrow
+                  ? ''
+                  : isIncomeForUser
+                  ? '+'
+                  : '−';
                 const badgeLabel = isBorrow
                   ? isLent
                     ? 'Cho vay thêm'
+                    : isInstallmentDebt
+                    ? 'Mua thêm'
                     : 'Vay thêm'
                   : isLent
                   ? 'Thu nợ'
+                  : isInstallmentDebt
+                  ? 'Trả góp'
                   : 'Trả nợ';
                 return (
                   <View key={item.data.id} style={styles.historyItemWrapper}>
@@ -732,13 +1037,20 @@ const DebtDetailScreen: React.FC = () => {
         <TouchableOpacity
           style={[
             styles.borrowBtn,
-            { borderColor: accentColor },
+            {
+              borderColor: isInstallmentDebt ? '#F59E0B' : accentColor,
+            },
           ]}
-          onPress={openBorrow}
+          onPress={isInstallmentDebt ? openAddInterest : openBorrow}
           activeOpacity={0.85}
         >
-          <Text style={[styles.borrowBtnText, { color: accentColor }]}>
-            {isLent ? '+ Cho vay thêm' : '+ Vay thêm'}
+          <Text
+            style={[
+              styles.borrowBtnText,
+              { color: isInstallmentDebt ? '#B45309' : accentColor },
+            ]}
+          >
+            {borrowBtnLabel}
           </Text>
         </TouchableOpacity>
         {!isSettled && (
@@ -756,9 +1068,7 @@ const DebtDetailScreen: React.FC = () => {
             <View style={styles.repayBtnIcon}>
               <Text style={styles.repayBtnIconText}>+</Text>
             </View>
-            <Text style={styles.repayBtnText}>
-              {isLent ? 'Ghi nhận thu tiền' : 'Ghi nhận trả nợ'}
-            </Text>
+            <Text style={styles.repayBtnText}>{repayBtnLabel}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -779,7 +1089,11 @@ const DebtDetailScreen: React.FC = () => {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.modalTitle}>
-              {isLent ? 'Ghi nhận thu tiền' : 'Ghi nhận trả nợ'}
+              {isLent
+                ? 'Ghi nhận thu tiền'
+                : isInstallmentDebt
+                ? 'Ghi nhận trả góp'
+                : 'Ghi nhận trả nợ'}
             </Text>
             <Text style={styles.modalSubtitle}>
               {debt.counterparty} • Còn lại {remaining.toLocaleString('vi-VN')}đ
@@ -805,6 +1119,44 @@ const DebtDetailScreen: React.FC = () => {
               isDisabled={(f) => !isLent && (f.balance ?? 0) < repayAmount}
               disabledReason={() => 'Không đủ'}
             />
+
+            {isInstallmentDebt &&
+              (showRepayInterest ? (
+                <>
+                  <View style={styles.interestFieldHeader}>
+                    <Text style={styles.inputLabel}>Tiền lãi kỳ này</Text>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setShowRepayInterest(false);
+                        setRepayInterest(0);
+                      }}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.interestRemoveText}>Bỏ</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <CurrencyInput
+                    value={repayInterest}
+                    onChange={setRepayInterest}
+                    placeholder="0"
+                    inputWrapperStyle={styles.amountInputWrap}
+                    inputStyle={styles.amountInputText}
+                    suffixStyle={styles.amountInputSuffix}
+                  />
+                  <Text style={styles.repayInterestHint}>
+                    Lãi cộng vào tổng cần trả, không trừ thêm từ quỹ.
+                  </Text>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={styles.addInterestInlineBtn}
+                  onPress={() => setShowRepayInterest(true)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.addInterestInlineText}>+ Thêm lãi</Text>
+                </TouchableOpacity>
+              ))}
 
             <Text style={styles.inputLabel}>Ngày</Text>
             <DatePicker value={repayDate} onChange={setRepayDate} />
@@ -861,7 +1213,11 @@ const DebtDetailScreen: React.FC = () => {
             keyboardShouldPersistTaps="handled"
           >
             <Text style={styles.modalTitle}>
-              {isLent ? 'Cho vay thêm' : 'Vay thêm'}
+              {isLent
+                ? 'Cho vay thêm'
+                : isInstallmentDebt
+                ? 'Mua thêm'
+                : 'Vay thêm'}
             </Text>
             <Text style={styles.modalSubtitle}>
               {debt.counterparty} • Đang còn{' '}
@@ -878,16 +1234,25 @@ const DebtDetailScreen: React.FC = () => {
               suffixStyle={styles.amountInputSuffix}
             />
 
-            <Text style={styles.inputLabel}>
-              {isLent ? 'Quỹ trừ tiền' : 'Quỹ nhận tiền'}
-            </Text>
-            <FundPicker
-              funds={fundsDefaultFirst}
-              selectedFundId={borrowFundId}
-              onSelect={setBorrowFundId}
-              isDisabled={(f) => isLent && (f.balance ?? 0) < borrowAmount}
-              disabledReason={() => 'Không đủ'}
-            />
+            {!isInstallmentDebt && (
+              <>
+                <Text style={styles.inputLabel}>
+                  {isLent ? 'Quỹ trừ tiền' : 'Quỹ nhận tiền'}
+                </Text>
+                <FundPicker
+                  funds={fundsDefaultFirst}
+                  selectedFundId={borrowFundId}
+                  onSelect={setBorrowFundId}
+                  isDisabled={(f) => isLent && (f.balance ?? 0) < borrowAmount}
+                  disabledReason={() => 'Không đủ'}
+                />
+              </>
+            )}
+            {isInstallmentDebt && (
+              <Text style={styles.modalHint}>
+                Mua thêm cho khoản trả góp không tạo dòng tiền vào quỹ.
+              </Text>
+            )}
 
             <Text style={styles.inputLabel}>Ngày</Text>
             <DatePicker value={borrowDate} onChange={setBorrowDate} />
@@ -1056,12 +1421,13 @@ const DebtDetailScreen: React.FC = () => {
       >
         <View style={styles.modalContentCenter}>
           {debt && deleteBorrowTarget && (() => {
-            const isLent = debt.direction === 'lent';
+            const isLentDb = debt.direction === 'lent';
+            const isInstallmentDb = debt.direction === 'installment';
             const amt = deleteBorrowTarget.amount;
             const primaryFund = funds.find((f) => f.id === deleteBorrowFundId);
             const primaryBalance = primaryFund?.balance ?? 0;
             // Cho 'borrowed' borrow: hoàn tác = trừ quỹ → cần đủ.
-            const needsOffset = !isLent && primaryBalance < amt;
+            const needsOffset = !isLentDb && !isInstallmentDb && primaryBalance < amt;
             const deficit = needsOffset ? amt - primaryBalance : 0;
             return (
               <ScrollView
@@ -1071,48 +1437,58 @@ const DebtDetailScreen: React.FC = () => {
                 keyboardShouldPersistTaps="handled"
               >
                 <Text style={styles.modalTitle}>
-                  {isLent ? 'Xóa lần cho vay thêm' : 'Xóa lần vay thêm'}{' '}
+                  {isLentDb
+                    ? 'Xóa lần cho vay thêm'
+                    : isInstallmentDb
+                    ? 'Xóa lần mua thêm'
+                    : 'Xóa lần vay thêm'}{' '}
                   {amt.toLocaleString('vi-VN')}đ
                 </Text>
                 <Text style={styles.modalSubtitle}>
-                  Số dư quỹ sẽ được hoàn tác tương ứng.
+                  {isInstallmentDb
+                    ? 'Mua thêm cho khoản trả góp không tạo dòng tiền — số dư quỹ không đổi.'
+                    : 'Số dư quỹ sẽ được hoàn tác tương ứng.'}
                 </Text>
 
-                <Text style={styles.inputLabel}>
-                  {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
-                </Text>
-                <FundPicker
-                  funds={fundsDefaultFirst}
-                  selectedFundId={deleteBorrowFundId}
-                  onSelect={(id) => {
-                    setDeleteBorrowFundId(id);
-                    setDeleteBorrowOffsetId('');
-                  }}
-                />
-
-                {needsOffset && (
+                {!isInstallmentDb && (
                   <>
-                    <View style={styles.deficitNotice}>
-                      <Text style={styles.deficitNoticeTitle}>
-                        "{primaryFund?.name ?? 'Quỹ'}" không đủ
-                      </Text>
-                      <Text style={styles.deficitNoticeText}>
-                        Thiếu {deficit.toLocaleString('vi-VN')}đ. Chọn quỹ khác
-                        để cấn trừ phần còn thiếu.
-                      </Text>
-                    </View>
-
-                    <Text style={styles.inputLabel}>Cấn trừ từ</Text>
+                    <Text style={styles.inputLabel}>
+                      {isLentDb ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
+                    </Text>
                     <FundPicker
-                      funds={fundsDefaultFirst.filter(
-                        (f) =>
-                          f.id !== deleteBorrowFundId &&
-                          (f.balance ?? 0) >= deficit,
-                      )}
-                      selectedFundId={deleteBorrowOffsetId}
-                      onSelect={setDeleteBorrowOffsetId}
-                      emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                      funds={fundsDefaultFirst}
+                      selectedFundId={deleteBorrowFundId}
+                      onSelect={(id) => {
+                        setDeleteBorrowFundId(id);
+                        setDeleteBorrowOffsetId('');
+                      }}
                     />
+
+                    {needsOffset && (
+                      <>
+                        <View style={styles.deficitNotice}>
+                          <Text style={styles.deficitNoticeTitle}>
+                            "{primaryFund?.name ?? 'Quỹ'}" không đủ
+                          </Text>
+                          <Text style={styles.deficitNoticeText}>
+                            Thiếu {deficit.toLocaleString('vi-VN')}đ. Chọn quỹ khác
+                            để cấn trừ phần còn thiếu.
+                          </Text>
+                        </View>
+
+                        <Text style={styles.inputLabel}>Cấn trừ từ</Text>
+                        <FundPicker
+                          funds={fundsDefaultFirst.filter(
+                            (f) =>
+                              f.id !== deleteBorrowFundId &&
+                              (f.balance ?? 0) >= deficit,
+                          )}
+                          selectedFundId={deleteBorrowOffsetId}
+                          onSelect={setDeleteBorrowOffsetId}
+                          emptyText="Không có quỹ nào đủ số dư để cấn trừ."
+                        />
+                      </>
+                    )}
                   </>
                 )}
               </ScrollView>
@@ -1133,11 +1509,13 @@ const DebtDetailScreen: React.FC = () => {
                 styles.modalDelete,
                 (() => {
                   if (!debt || !deleteBorrowTarget) return { opacity: 0.5 };
-                  const isLent = debt.direction === 'lent';
+                  const isLentDb = debt.direction === 'lent';
+                  const isInstDb = debt.direction === 'installment';
+                  if (isInstDb) return null;
                   const primaryFund = funds.find((f) => f.id === deleteBorrowFundId);
                   const primaryBalance = primaryFund?.balance ?? 0;
                   const needsOffset =
-                    !isLent && primaryBalance < deleteBorrowTarget.amount;
+                    !isLentDb && primaryBalance < deleteBorrowTarget.amount;
                   if (!deleteBorrowFundId) return { opacity: 0.5 };
                   if (needsOffset && !deleteBorrowOffsetId) return { opacity: 0.5 };
                   return null;
@@ -1147,11 +1525,13 @@ const DebtDetailScreen: React.FC = () => {
               disabled={(() => {
                 if (isDeletingBorrow) return true;
                 if (!debt || !deleteBorrowTarget) return true;
-                const isLent = debt.direction === 'lent';
+                const isLentDb = debt.direction === 'lent';
+                const isInstDb = debt.direction === 'installment';
+                if (isInstDb) return false;
                 const primaryFund = funds.find((f) => f.id === deleteBorrowFundId);
                 const primaryBalance = primaryFund?.balance ?? 0;
                 const needsOffset =
-                  !isLent && primaryBalance < deleteBorrowTarget.amount;
+                  !isLentDb && primaryBalance < deleteBorrowTarget.amount;
                 if (!deleteBorrowFundId) return true;
                 if (needsOffset && !deleteBorrowOffsetId) return true;
                 return false;
@@ -1178,12 +1558,15 @@ const DebtDetailScreen: React.FC = () => {
       >
         <View style={styles.modalContentCenter}>
           {debt && (() => {
-            const isLent = debt.direction === 'lent';
+            const isLentDel = debt.direction === 'lent';
+            const isInstallmentDel = debt.direction === 'installment';
             const rem = debtRemaining(debt);
             const primaryFund = funds.find((f) => f.id === deleteDebtFundId);
             const primaryBalance = primaryFund?.balance ?? 0;
-            const needsOffset = !isLent && rem > 0 && primaryBalance < rem;
+            const needsOffset =
+              !isLentDel && !isInstallmentDel && rem > 0 && primaryBalance < rem;
             const deficit = needsOffset ? rem - primaryBalance : 0;
+            const showFundPickers = !isInstallmentDel && rem > 0;
 
             return (
               <ScrollView
@@ -1192,12 +1575,14 @@ const DebtDetailScreen: React.FC = () => {
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
               >
-                <Text style={styles.modalTitle}>Xóa khoản nợ</Text>
+                <Text style={styles.modalTitle}>
+                  {isInstallmentDel ? 'Xóa khoản trả góp' : 'Xóa khoản nợ'}
+                </Text>
                 <Text style={styles.modalSubtitle}>
                   {debt.counterparty} •{' '}
                   {rem > 0 ? (
                     <>
-                      Chưa thanh toán{' '}
+                      {isInstallmentDel ? 'Còn nợ ' : 'Chưa thanh toán '}
                       <Text style={styles.modalRefundAmount}>
                         {rem.toLocaleString('vi-VN')}đ
                       </Text>
@@ -1207,16 +1592,16 @@ const DebtDetailScreen: React.FC = () => {
                   )}
                 </Text>
 
-                {rem > 0 && (
+                {showFundPickers && (
                   <>
                     <Text style={styles.modalHint}>
                       Các giao dịch đã trả/thu trước đó được giữ nguyên trong quỹ.
-                      Chỉ phần chưa thanh toán sẽ được {isLent ? 'cộng vào' : 'trừ khỏi'} quỹ
+                      Chỉ phần chưa thanh toán sẽ được {isLentDel ? 'cộng vào' : 'trừ khỏi'} quỹ
                       bạn chọn.
                     </Text>
 
                     <Text style={styles.inputLabel}>
-                      {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
+                      {isLentDel ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
                     </Text>
                     <FundPicker
                       funds={fundsDefaultFirst}
@@ -1254,7 +1639,14 @@ const DebtDetailScreen: React.FC = () => {
                   </>
                 )}
 
-                {rem === 0 && (
+                {isInstallmentDel && (
+                  <Text style={styles.modalHint}>
+                    Xóa khoản trả góp khỏi danh sách. Các giao dịch trả đã ghi nhận
+                    trước đó vẫn giữ nguyên ở quỹ tương ứng — số dư các quỹ không đổi.
+                  </Text>
+                )}
+
+                {!isInstallmentDel && rem === 0 && (
                   <Text style={styles.modalHint}>
                     Xóa khoản nợ này khỏi danh sách. Các giao dịch liên kết cũng bị xóa.
                   </Text>
@@ -1277,10 +1669,12 @@ const DebtDetailScreen: React.FC = () => {
                 styles.modalDelete,
                 (() => {
                   if (!debt) return { opacity: 0.5 };
-                  const isLent = debt.direction === 'lent';
+                  const isLentBtn = debt.direction === 'lent';
+                  const isInstBtn = debt.direction === 'installment';
                   const rem = debtRemaining(debt);
+                  if (isInstBtn) return null;
                   if (rem > 0 && !deleteDebtFundId) return { opacity: 0.5 };
-                  if (rem > 0 && !isLent) {
+                  if (rem > 0 && !isLentBtn) {
                     const primary = funds.find((f) => f.id === deleteDebtFundId);
                     const needsOff = (primary?.balance ?? 0) < rem;
                     if (needsOff && !deleteDebtOffsetId) return { opacity: 0.5 };
@@ -1292,10 +1686,12 @@ const DebtDetailScreen: React.FC = () => {
               disabled={(() => {
                 if (isDeletingDebt) return true;
                 if (!debt) return true;
-                const isLent = debt.direction === 'lent';
+                const isLentBtn = debt.direction === 'lent';
+                const isInstBtn = debt.direction === 'installment';
                 const rem = debtRemaining(debt);
+                if (isInstBtn) return false;
                 if (rem > 0 && !deleteDebtFundId) return true;
-                if (rem > 0 && !isLent) {
+                if (rem > 0 && !isLentBtn) {
                   const primary = funds.find((f) => f.id === deleteDebtFundId);
                   const needsOff = (primary?.balance ?? 0) < rem;
                   if (needsOff && !deleteDebtOffsetId) return true;
@@ -1320,6 +1716,8 @@ const DebtDetailScreen: React.FC = () => {
         title={
           debt?.direction === 'lent'
             ? 'Chỉnh sửa khoản thu'
+            : debt?.direction === 'installment'
+            ? 'Chỉnh sửa khoản trả góp'
             : 'Chỉnh sửa khoản trả'
         }
         subtitle={
@@ -1353,32 +1751,168 @@ const DebtDetailScreen: React.FC = () => {
         title={
           debt?.direction === 'lent'
             ? 'Chỉnh sửa lần cho vay thêm'
+            : debt?.direction === 'installment'
+            ? 'Chỉnh sửa lần mua thêm'
             : 'Chỉnh sửa lần vay thêm'
         }
         subtitle={
           editBorrowTarget
-            ? `${editBorrowTarget.amount.toLocaleString('vi-VN')}đ${
-                editBorrowTarget.fundId
-                  ? ` • ${
-                      funds.find((f) => f.id === editBorrowTarget.fundId)?.name ??
-                      'Quỹ đã bị xóa'
-                    }`
-                  : ''
-              }`
+            ? debt?.direction === 'installment'
+              ? undefined
+              : `${editBorrowTarget.amount.toLocaleString('vi-VN')}đ${
+                  editBorrowTarget.fundId
+                    ? ` • ${
+                        funds.find((f) => f.id === editBorrowTarget.fundId)?.name ??
+                        'Quỹ đã bị xóa'
+                      }`
+                    : ''
+                }`
             : undefined
         }
-        hint="Chỉ có thể sửa ghi chú và ngày giờ. Số tiền và quỹ sẽ giữ nguyên."
+        hint={
+          debt?.direction === 'installment'
+            ? 'Có thể sửa số tiền, ghi chú và ngày giờ.'
+            : 'Chỉ có thể sửa ghi chú và ngày giờ. Số tiền và quỹ sẽ giữ nguyên.'
+        }
         initialNote={editBorrowTarget?.note ?? ''}
         initialDate={editBorrowTarget?.date ?? new Date()}
-        onSave={async (note, date) => {
+        initialAmount={
+          debt?.direction === 'installment'
+            ? editBorrowTarget?.amount
+            : undefined
+        }
+        onSave={async (note, date, amount) => {
           if (!debtId || !editBorrowTarget) return;
           await updateBorrowNoteAndDate(debtId, editBorrowTarget.id, {
             note,
             date,
+            ...(amount !== undefined ? { amount } : {}),
           });
         }}
         successMessage="Đã cập nhật giao dịch"
       />
+
+      {/* Interest add/edit modal */}
+      <Modal
+        isVisible={interestModalVisible}
+        onBackdropPress={closeInterestModal}
+        onBackButtonPress={closeInterestModal}
+        style={styles.modal}
+        avoidKeyboard
+      >
+        <View style={styles.modalContent}>
+          <ScrollView
+            style={styles.modalBody}
+            contentContainerStyle={styles.modalBodyContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={styles.modalTitle}>
+              {interestEditTarget ? 'Sửa khoản lãi' : 'Thêm khoản lãi'}
+            </Text>
+            <Text style={styles.modalSubtitle}>
+              Lãi chỉ cộng vào tổng cần trả — không trừ tiền từ quỹ.
+            </Text>
+
+            <Text style={styles.inputLabel}>Số tiền lãi</Text>
+            <CurrencyInput
+              value={interestAmount}
+              onChange={setInterestAmount}
+              placeholder="0"
+              inputWrapperStyle={styles.amountInputWrap}
+              inputStyle={styles.amountInputText}
+              suffixStyle={styles.amountInputSuffix}
+            />
+
+            <Text style={styles.inputLabel}>Ngày</Text>
+            <DatePicker value={interestDate} onChange={setInterestDate} />
+
+            <Text style={styles.inputLabel}>Ghi chú</Text>
+            <TextInput
+              style={[styles.textInput, styles.textInputMulti]}
+              value={interestNote}
+              onChangeText={setInterestNote}
+              placeholder="VD: Lãi tháng 5..."
+              placeholderTextColor={colors.textLight}
+              multiline
+            />
+          </ScrollView>
+
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={styles.modalCancel}
+              onPress={closeInterestModal}
+              disabled={isSavingInterest}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.modalCancelText}>Hủy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalSave}
+              onPress={handleSaveInterest}
+              disabled={isSavingInterest}
+              activeOpacity={0.85}
+            >
+              {isSavingInterest ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.modalSaveText}>Lưu</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Delete interest confirmation */}
+      <Modal
+        isVisible={!!deleteInterestTarget}
+        onBackdropPress={() => !isDeletingInterest && setDeleteInterestTarget(null)}
+        onBackButtonPress={() => !isDeletingInterest && setDeleteInterestTarget(null)}
+        style={styles.modalCenter}
+        avoidKeyboard
+      >
+        <View style={styles.modalContentCenter}>
+          {deleteInterestTarget && (
+            <ScrollView
+              style={styles.modalBody}
+              contentContainerStyle={styles.modalBodyContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.modalTitle}>Xóa khoản lãi</Text>
+              <Text style={styles.modalSubtitle}>
+                {deleteInterestTarget.amount.toLocaleString('vi-VN')}đ •{' '}
+                {deleteInterestTarget.date.toLocaleDateString('vi-VN')}
+              </Text>
+              <Text style={styles.modalHint}>
+                Khoản lãi sẽ bị trừ khỏi tổng cần trả. Số dư các quỹ không đổi.
+              </Text>
+            </ScrollView>
+          )}
+
+          <View style={styles.modalButtons}>
+            <TouchableOpacity
+              style={styles.modalCancel}
+              onPress={() => setDeleteInterestTarget(null)}
+              disabled={isDeletingInterest}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.modalCancelText}>Hủy</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.modalDelete}
+              onPress={handleConfirmDeleteInterest}
+              disabled={isDeletingInterest}
+              activeOpacity={0.85}
+            >
+              {isDeletingInterest ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.modalSaveText}>Xóa</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <ErrorPopup
         visible={errorPopup.visible}
@@ -1621,6 +2155,61 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 12,
   },
+  historyTabBar: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.inputBackground,
+    marginBottom: 12,
+  },
+  historyTabItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  historyTabItemActive: {},
+  historyTabText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  historyTabCountBadge: {
+    minWidth: 20,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 8,
+    backgroundColor: colors.inputBackground,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  historyTabCountText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: colors.textSecondary,
+  },
+  interestSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: '#F59E0B' + '12',
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  interestSummaryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#B45309',
+  },
+  interestSummaryAmount: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#B45309',
+  },
   sectionAccentBar: {
     width: 4,
     height: 16,
@@ -1806,6 +2395,37 @@ const styles = StyleSheet.create({
   modalBodyContent: { paddingBottom: 10, gap: 10 },
   modalTitle: { fontSize: 16, fontWeight: '900', color: colors.text },
   modalSubtitle: { fontSize: 13, color: colors.textSecondary },
+  interestFieldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  interestRemoveText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.error,
+  },
+  repayInterestHint: {
+    fontSize: 12,
+    color: '#B45309',
+    fontStyle: 'italic',
+    marginTop: -2,
+  },
+  addInterestInlineBtn: {
+    paddingVertical: 11,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#F59E0B',
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    backgroundColor: '#F59E0B' + '08',
+    marginTop: 2,
+  },
+  addInterestInlineText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#B45309',
+  },
   modalHint: {
     fontSize: 12,
     color: colors.textSecondary,

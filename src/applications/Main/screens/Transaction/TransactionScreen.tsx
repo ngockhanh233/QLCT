@@ -16,7 +16,7 @@ import {
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { DatePicker, MonthPicker } from '../../../../components';
+import { MonthPicker } from '../../../../components';
 import EditNoteDateModal from '../Debts/components/EditNoteDateModal';
 import Modal from 'react-native-modal';
 import { colors } from '../../../../utils/color';
@@ -57,7 +57,7 @@ interface LoanGroupChild {
 interface LoanGroupData {
   debtId: string;
   counterparty: string;
-  direction: 'lent' | 'borrowed';
+  direction: 'lent' | 'borrowed' | 'installment';
   principal: number;
   remaining: number;
   /** Children thuộc về ngày hiển thị card này (có thể chỉ là subset nếu debt có
@@ -116,7 +116,7 @@ const STORAGE_KEY_SHOW_LOAN_IN_LIST = 'transaction_show_loan_in_list';
 
 type TransactionKindFilter = 'all' | 'income' | 'expense';
 type MainTab = 'transactions' | 'debts';
-type LoanDirectionFilter = 'all' | 'lent' | 'borrowed';
+type LoanDirectionFilter = 'all' | 'lent' | 'borrowed' | 'installment';
 
 const TYPE_FILTERS: { key: TransactionKindFilter; label: string }[] = [
   { key: 'all', label: 'Tất cả' },
@@ -816,7 +816,8 @@ const TransactionScreen: React.FC = () => {
   const handleConfirmDeleteDebt = async () => {
     if (!deleteDebtTarget) return;
     const rem = debtRemaining(deleteDebtTarget);
-    if (rem > 0 && !deleteDebtFundId) {
+    const isInstallmentTarget = deleteDebtTarget.direction === 'installment';
+    if (!isInstallmentTarget && rem > 0 && !deleteDebtFundId) {
       showErrorModal('Lỗi', 'Vui lòng chọn quỹ');
       return;
     }
@@ -824,7 +825,7 @@ const TransactionScreen: React.FC = () => {
     try {
       await deleteDebtFromCtx(
         deleteDebtTarget.id,
-        rem > 0
+        !isInstallmentTarget && rem > 0
           ? {
               refundFundId: deleteDebtFundId,
               offsetSourceFundId: deleteDebtOffsetId || undefined,
@@ -844,7 +845,29 @@ const TransactionScreen: React.FC = () => {
     const data = item.loanGroupData;
     if (!data) return null;
     const isLent = data.direction === 'lent';
-    const accentColor = isLent ? colors.success : colors.error;
+    const isInstallmentDebt = data.direction === 'installment';
+    const INSTALLMENT_COLOR = '#F59E0B';
+    const INSTALLMENT_TEXT = '#B45309';
+    const accentColor = isLent
+      ? colors.success
+      : isInstallmentDebt
+      ? INSTALLMENT_COLOR
+      : colors.error;
+    const directionLabel = isLent
+      ? 'Cho vay'
+      : isInstallmentDebt
+      ? 'Trả góp'
+      : 'Đi vay';
+    const directionBadgeBg = isLent
+      ? colors.success + '20'
+      : isInstallmentDebt
+      ? INSTALLMENT_COLOR + '20'
+      : '#FEE2E2';
+    const directionBadgeText = isLent
+      ? colors.success
+      : isInstallmentDebt
+      ? INSTALLMENT_TEXT
+      : '#B91C1C';
     const paid = data.principal - data.remaining;
     const pct = data.principal > 0 ? Math.min(100, (paid / data.principal) * 100) : 0;
     const isSettled = data.remaining <= 0 && data.principal > 0;
@@ -852,13 +875,13 @@ const TransactionScreen: React.FC = () => {
     const childLabel = (catId: string): string => {
       switch (catId) {
         case LOAN_CATEGORY_IDS.lent:
-          return 'Cho vay';
+          return isInstallmentDebt ? 'Trả góp' : 'Cho vay';
         case LOAN_CATEGORY_IDS.borrowed:
           return 'Đi vay';
         case LOAN_CATEGORY_IDS.repayReceived:
           return 'Thu';
         case LOAN_CATEGORY_IDS.repayPaid:
-          return 'Trả';
+          return isInstallmentDebt ? 'Trả góp' : 'Trả';
         default:
           return 'Giao dịch';
       }
@@ -906,20 +929,16 @@ const TransactionScreen: React.FC = () => {
               <View
                 style={[
                   styles.loanGroupDirectionBadge,
-                  {
-                    backgroundColor: isLent
-                      ? colors.success + '20'
-                      : '#FEE2E2',
-                  },
+                  { backgroundColor: directionBadgeBg },
                 ]}
               >
                 <Text
                   style={[
                     styles.loanGroupDirectionText,
-                    { color: isLent ? colors.success : '#B91C1C' },
+                    { color: directionBadgeText },
                   ]}
                 >
-                  {isLent ? 'Cho vay' : 'Đi vay'}
+                  {directionLabel}
                 </Text>
               </View>
               {isSettled && (
@@ -1219,6 +1238,7 @@ const TransactionScreen: React.FC = () => {
               { key: 'all', label: 'Tất cả' },
               { key: 'lent', label: 'Cho vay' },
               { key: 'borrowed', label: 'Đi vay' },
+              { key: 'installment', label: 'Trả góp' },
             ] as { key: LoanDirectionFilter; label: string }[]
           ).map((opt) => {
             const isActive = loanDirectionFilter === opt.key;
@@ -1731,12 +1751,15 @@ const TransactionScreen: React.FC = () => {
       >
         <View style={styles.debtDeleteContent}>
           {deleteDebtTarget && (() => {
-            const isLent = deleteDebtTarget.direction === 'lent';
+            const isLentDel = deleteDebtTarget.direction === 'lent';
+            const isInstallmentDel = deleteDebtTarget.direction === 'installment';
             const rem = debtRemaining(deleteDebtTarget);
             const primaryFund = funds.find((f) => f.id === deleteDebtFundId);
             const primaryBalance = primaryFund?.balance ?? 0;
-            const needsOffset = !isLent && rem > 0 && primaryBalance < rem;
+            const needsOffset =
+              !isLentDel && !isInstallmentDel && rem > 0 && primaryBalance < rem;
             const deficit = needsOffset ? rem - primaryBalance : 0;
+            const showFundPickers = !isInstallmentDel && rem > 0;
 
             return (
               <ScrollView
@@ -1744,12 +1767,14 @@ const TransactionScreen: React.FC = () => {
                 contentContainerStyle={styles.debtDeleteBody}
                 keyboardShouldPersistTaps="handled"
               >
-                <Text style={styles.debtDeleteTitle}>Xóa khoản nợ</Text>
+                <Text style={styles.debtDeleteTitle}>
+                  {isInstallmentDel ? 'Xóa khoản trả góp' : 'Xóa khoản nợ'}
+                </Text>
                 <Text style={styles.debtDeleteSubtitle}>
                   {deleteDebtTarget.counterparty} •{' '}
                   {rem > 0 ? (
                     <>
-                      Chưa thanh toán{' '}
+                      {isInstallmentDel ? 'Còn nợ ' : 'Chưa thanh toán '}
                       <Text style={styles.debtDeleteRefundAmount}>
                         {rem.toLocaleString('vi-VN')}đ
                       </Text>
@@ -1759,16 +1784,16 @@ const TransactionScreen: React.FC = () => {
                   )}
                 </Text>
 
-                {rem > 0 && (
+                {showFundPickers && (
                   <>
                     <Text style={styles.debtDeleteHint}>
                       Các giao dịch đã trả/thu trước đó được giữ nguyên trong quỹ.
                       Chỉ phần chưa thanh toán sẽ được{' '}
-                      {isLent ? 'cộng vào' : 'trừ khỏi'} quỹ bạn chọn.
+                      {isLentDel ? 'cộng vào' : 'trừ khỏi'} quỹ bạn chọn.
                     </Text>
 
                     <Text style={styles.debtDeleteLabel}>
-                      {isLent ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
+                      {isLentDel ? 'Quỹ nhận lại' : 'Quỹ trừ tiền'}
                     </Text>
                     <FundPicker
                       funds={fundsDefaultFirst}
@@ -1806,7 +1831,15 @@ const TransactionScreen: React.FC = () => {
                   </>
                 )}
 
-                {rem === 0 && (
+                {isInstallmentDel && (
+                  <Text style={styles.debtDeleteHint}>
+                    Xóa khoản trả góp khỏi danh sách. Các giao dịch trả đã ghi
+                    nhận trước đó vẫn giữ nguyên ở quỹ tương ứng — số dư các quỹ
+                    không đổi.
+                  </Text>
+                )}
+
+                {!isInstallmentDel && rem === 0 && (
                   <Text style={styles.debtDeleteHint}>
                     Xóa khoản nợ này khỏi danh sách. Các giao dịch liên kết cũng bị xóa.
                   </Text>
@@ -1829,10 +1862,12 @@ const TransactionScreen: React.FC = () => {
                 styles.debtDeleteConfirm,
                 (() => {
                   if (!deleteDebtTarget) return { opacity: 0.5 };
-                  const isLent = deleteDebtTarget.direction === 'lent';
+                  const isLentBtn = deleteDebtTarget.direction === 'lent';
+                  const isInstBtn = deleteDebtTarget.direction === 'installment';
                   const rem = debtRemaining(deleteDebtTarget);
+                  if (isInstBtn) return null;
                   if (rem > 0 && !deleteDebtFundId) return { opacity: 0.5 };
-                  if (rem > 0 && !isLent) {
+                  if (rem > 0 && !isLentBtn) {
                     const primary = funds.find((f) => f.id === deleteDebtFundId);
                     const needsOff = (primary?.balance ?? 0) < rem;
                     if (needsOff && !deleteDebtOffsetId) return { opacity: 0.5 };
@@ -1844,10 +1879,12 @@ const TransactionScreen: React.FC = () => {
               disabled={(() => {
                 if (isDeletingDebt) return true;
                 if (!deleteDebtTarget) return true;
-                const isLent = deleteDebtTarget.direction === 'lent';
+                const isLentBtn = deleteDebtTarget.direction === 'lent';
+                const isInstBtn = deleteDebtTarget.direction === 'installment';
                 const rem = debtRemaining(deleteDebtTarget);
+                if (isInstBtn) return false;
                 if (rem > 0 && !deleteDebtFundId) return true;
-                if (rem > 0 && !isLent) {
+                if (rem > 0 && !isLentBtn) {
                   const primary = funds.find((f) => f.id === deleteDebtFundId);
                   const needsOff = (primary?.balance ?? 0) < rem;
                   if (needsOff && !deleteDebtOffsetId) return true;
@@ -1874,7 +1911,11 @@ const TransactionScreen: React.FC = () => {
         subtitle={
           editDebtTarget
             ? `${editDebtTarget.counterparty} • ${
-                editDebtTarget.direction === 'lent' ? 'Cho vay' : 'Đi vay'
+                editDebtTarget.direction === 'lent'
+                  ? 'Cho vay'
+                  : editDebtTarget.direction === 'installment'
+                  ? 'Trả góp'
+                  : 'Đi vay'
               } • ${editDebtTarget.principal.toLocaleString('vi-VN')}đ`
             : undefined
         }

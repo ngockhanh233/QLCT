@@ -80,7 +80,7 @@ async function safePushNotification(
   }
 }
 
-export type DebtDirection = 'lent' | 'borrowed';
+export type DebtDirection = 'lent' | 'borrowed' | 'installment';
 export type DebtStatus = 'open' | 'settled';
 
 /** CategoryId đặc biệt dùng cho các transaction liên kết với nợ (isLoanMovement=true). */
@@ -110,6 +110,17 @@ export type DebtBorrow = {
   transactionId?: string;
 };
 
+/**
+ * Khoản lãi ghi nhận thủ công. Không đụng quỹ, không tạo transaction —
+ * chỉ cộng vào tổng cần trả để hiển thị gốc vs lãi rõ ràng.
+ */
+export type DebtInterest = {
+  id: string;
+  amount: number;
+  date: Date;
+  note?: string;
+};
+
 export type DebtRecord = {
   id: string;
   userId: string;
@@ -123,6 +134,8 @@ export type DebtRecord = {
   repayments: DebtRepayment[];
   /** Các lần vay/cho vay thêm sau khi tạo debt (nếu có). */
   additionalBorrows: DebtBorrow[];
+  /** Các khoản lãi ghi nhận thủ công (không đụng quỹ). */
+  interestEntries: DebtInterest[];
   status: DebtStatus;
   createdAt?: Date;
   updatedAt?: Date;
@@ -172,6 +185,18 @@ function mapDebtDoc(docSnap: QueryDoc | FirebaseFirestoreTypes.DocumentSnapshot)
     }))
     .filter((b: DebtBorrow) => !!b.id);
 
+  const rawInterestEntries = Array.isArray(data.interestEntries)
+    ? data.interestEntries
+    : [];
+  const interestEntries: DebtInterest[] = rawInterestEntries
+    .map((i: any) => ({
+      id: String(i?.id ?? ''),
+      amount: Number(i?.amount ?? 0) || 0,
+      date: tsToDate(i?.date) ?? new Date(),
+      note: (i?.note as string | undefined) ?? undefined,
+    }))
+    .filter((i: DebtInterest) => !!i.id);
+
   return {
     id: docSnap.id,
     userId: String(data.userId ?? ''),
@@ -184,6 +209,7 @@ function mapDebtDoc(docSnap: QueryDoc | FirebaseFirestoreTypes.DocumentSnapshot)
     note: (data.note as string | undefined) ?? null,
     repayments,
     additionalBorrows,
+    interestEntries,
     status: (data.status as DebtStatus) ?? 'open',
     createdAt: tsToDate(data.createdAt),
     updatedAt: tsToDate(data.updatedAt),
@@ -233,7 +259,7 @@ export function subscribeDebts(
   );
 }
 
-/** Tổng số đã vay (principal + các lần vay thêm). */
+/** Tổng số đã vay (principal + các lần vay thêm). KHÔNG bao gồm lãi. */
 export function debtTotalBorrowed(debt: DebtRecord): number {
   const extra = (debt.additionalBorrows ?? []).reduce(
     (s, b) => s + (b.amount || 0),
@@ -242,10 +268,27 @@ export function debtTotalBorrowed(debt: DebtRecord): number {
   return (debt.principal || 0) + extra;
 }
 
-/** Tính số tiền còn lại (tổng vay - tổng đã trả). */
+/** Tổng tiền lãi đã ghi nhận thủ công. */
+export function debtTotalInterest(debt: DebtRecord): number {
+  return (debt.interestEntries ?? []).reduce(
+    (s, i) => s + (i.amount || 0),
+    0,
+  );
+}
+
+/** Tổng cần trả = gốc vay + lãi (không trừ đã trả). */
+export function debtTotalDue(debt: DebtRecord): number {
+  return debtTotalBorrowed(debt) + debtTotalInterest(debt);
+}
+
+/** Tổng đã trả/đã thu. */
+export function debtTotalPaid(debt: DebtRecord): number {
+  return (debt.repayments ?? []).reduce((s, r) => s + (r.amount || 0), 0);
+}
+
+/** Tính số tiền còn lại (tổng cần trả - đã trả). */
 export function debtRemaining(debt: DebtRecord): number {
-  const paid = (debt.repayments ?? []).reduce((s, r) => s + (r.amount || 0), 0);
-  return Math.max(0, debtTotalBorrowed(debt) - paid);
+  return Math.max(0, debtTotalDue(debt) - debtTotalPaid(debt));
 }
 
 function genId(): string {
@@ -255,10 +298,8 @@ function genId(): string {
 /**
  * Tạo khoản nợ mới — atomic:
  *  - Tạo doc `debts/<id>`
- *  - Tạo doc `transactions/<txId>` với isLoanMovement=true + debtId
- *  - Cập nhật `funds/<fundId>.balance`:
- *      - lent (cho vay): quỹ -principal (expense)
- *      - borrowed (đi vay): quỹ +principal (income)
+ *  - lent/borrowed: tạo transaction + cập nhật fund balance
+ *  - installment (trả góp): KHÔNG tạo transaction, KHÔNG đụng quỹ; fundId có thể null.
  */
 export async function createDebt(
   userId: string,
@@ -266,20 +307,61 @@ export async function createDebt(
     direction: DebtDirection;
     counterparty: string;
     principal: number;
-    fundId: string;
+    /** Optional cho 'installment'. Required cho 'lent'/'borrowed'. */
+    fundId: string | null;
     startDate: Date;
     dueDate?: Date | null;
     note?: string | null;
+    /** Lãi ban đầu (chỉ dùng cho 'installment'). Cộng vào tổng cần trả, không đụng quỹ. */
+    initialInterest?: number | null;
+    initialInterestNote?: string | null;
   },
 ): Promise<string> {
   const debtsCol = collection(firestoreInstance, DEBTS_COLLECTION);
   const txCol = collection(firestoreInstance, TRANSACTIONS_COLLECTION);
 
   const debtRef = doc(debtsCol);
-  const txRef = doc(txCol);
-  const fundRef = doc(firestoreInstance, FUNDS_COLLECTION, input.fundId);
+  const isInstallment = input.direction === 'installment';
 
   await runTransaction(firestoreInstance, async (trx) => {
+    if (isInstallment) {
+      // Trả góp: chỉ ghi nhận debt doc, không đụng quỹ, không tạo tx.
+      const seedInterest =
+        input.initialInterest && input.initialInterest > 0
+          ? [
+              {
+                id: genId(),
+                amount: Math.round(input.initialInterest),
+                date: input.startDate,
+                note: input.initialInterestNote?.trim()
+                  ? input.initialInterestNote.trim()
+                  : null,
+              },
+            ]
+          : [];
+      trx.set(debtRef, {
+        userId,
+        direction: input.direction,
+        counterparty: input.counterparty.trim(),
+        principal: Math.round(input.principal),
+        fundId: input.fundId ?? null,
+        startDate: input.startDate,
+        dueDate: input.dueDate ?? null,
+        note: input.note?.trim() ? input.note.trim() : null,
+        repayments: [],
+        additionalBorrows: [],
+        interestEntries: seedInterest,
+        status: 'open' as DebtStatus,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    if (!input.fundId) {
+      throw new Error('Vui lòng chọn quỹ');
+    }
+    const fundRef = doc(firestoreInstance, FUNDS_COLLECTION, input.fundId);
     const fundSnap = await trx.get(fundRef);
     if (!fundSnap.exists) {
       throw new Error('Quỹ không tồn tại');
@@ -309,11 +391,14 @@ export async function createDebt(
       dueDate: input.dueDate ?? null,
       note: input.note?.trim() ? input.note.trim() : null,
       repayments: [],
+      additionalBorrows: [],
+      interestEntries: [],
       status: 'open' as DebtStatus,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
 
+    const txRef = doc(txCol);
     trx.set(txRef, {
       userId,
       type: txType,
@@ -335,18 +420,30 @@ export async function createDebt(
   });
 
   // Push notification (best-effort)
-  const isLent = input.direction === 'lent';
-  const { totalAfter, byId } = await fetchFundsSummary(userId, [input.fundId]);
-  const fundInfo = byId.get(input.fundId);
-  const fundName = fundInfo?.name ?? 'Quỹ';
-  const fundBalance = fundInfo?.balance ?? 0;
+  const counterparty = input.counterparty.trim();
   const amt = Math.round(input.principal);
   const amtLabel = formatAmount(amt);
+
+  if (isInstallment) {
+    await safePushNotification(userId, {
+      kind: 'transaction_added',
+      title: 'Trả góp',
+      message: `Đã ghi nhận khoản trả góp ${amtLabel} với "${counterparty}".`,
+    });
+    return debtRef.id;
+  }
+
+  const isLent = input.direction === 'lent';
+  const { totalAfter, byId } = await fetchFundsSummary(userId, [
+    input.fundId as string,
+  ]);
+  const fundInfo = byId.get(input.fundId as string);
+  const fundName = fundInfo?.name ?? 'Quỹ';
+  const fundBalance = fundInfo?.balance ?? 0;
   const fundBalLabel = formatAmount(fundBalance);
   const totalLabel = formatAmount(totalAfter);
   const delta = isLent ? -amt : amt;
   const signedDeltaLabel = formatSigned(delta);
-  const counterparty = input.counterparty.trim();
   const msg = isLent
     ? `Đã ghi nhận khoản cho vay ${amtLabel} tới "${counterparty}" từ "${fundName}".\n"${fundName}"\n${signedDeltaLabel} - Số dư: ${fundBalLabel}\nTổng số dư: ${totalLabel}`
     : `Đã ghi nhận khoản vay ${amtLabel} từ "${counterparty}" vào "${fundName}".\n"${fundName}"\n${signedDeltaLabel} - Số dư: ${fundBalLabel}\nTổng số dư: ${totalLabel}`;
@@ -400,7 +497,7 @@ export async function updateDebtNoteAndStartDate(
       updatedAt: serverTimestamp(),
     });
 
-    principalTxSnap.docs.forEach((d) => {
+    principalTxSnap.docs.forEach((d: QueryDoc) => {
       trx.update(d.ref, {
         note: noteValue,
         transactionDate: input.startDate,
@@ -484,7 +581,7 @@ export async function updateDebtRepayment(
  *  - Cập nhật fund balance:
  *      - lent (cho vay) → thu về: quỹ +amount (income)
  *      - borrowed (đi vay) → trả ra: quỹ -amount (expense)
- *  - Nếu tổng repayments >= principal → status='settled'
+ *  - Nếu tổng đã trả >= tổng cần trả (gốc + vay thêm + lãi) → status='settled'
  */
 export async function addDebtRepayment(
   userId: string,
@@ -494,6 +591,9 @@ export async function addDebtRepayment(
     fundId: string;
     date: Date;
     note?: string | null;
+    /** Lãi ghi nhận kèm (optional). Cộng vào tổng cần trả, không đụng quỹ. */
+    interestAmount?: number;
+    interestNote?: string | null;
   },
 ): Promise<void> {
   const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
@@ -521,11 +621,32 @@ export async function addDebtRepayment(
     const existingRepayments = Array.isArray(debtData.repayments)
       ? debtData.repayments
       : [];
+    const existingBorrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const existingInterests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
+    const extraBorrowed = existingBorrows.reduce(
+      (s: number, b: any) => s + (Number(b?.amount) || 0),
+      0,
+    );
+    const totalInterest = existingInterests.reduce(
+      (s: number, i: any) => s + (Number(i?.amount) || 0),
+      0,
+    );
     const totalPaid = existingRepayments.reduce(
       (s: number, r: any) => s + (Number(r?.amount) || 0),
       0,
     );
-    const remaining = Math.max(0, principal - totalPaid);
+
+    // Lãi ghi nhận kèm (nếu có) — cộng vào tổng cần trả trước khi validate.
+    const addedInterest =
+      input.interestAmount && input.interestAmount > 0
+        ? Math.round(input.interestAmount)
+        : 0;
+    const totalDue = principal + extraBorrowed + totalInterest + addedInterest;
+    const remaining = Math.max(0, totalDue - totalPaid);
 
     const amt = Math.round(input.amount);
     if (amt <= 0) {
@@ -560,13 +681,23 @@ export async function addDebtRepayment(
     };
 
     const nextTotalPaid = totalPaid + amt;
-    const nextStatus: DebtStatus = nextTotalPaid >= principal ? 'settled' : 'open';
+    const nextStatus: DebtStatus = nextTotalPaid >= totalDue ? 'settled' : 'open';
 
-    trx.update(debtRef, {
+    const debtUpdate: Record<string, unknown> = {
       repayments: [...existingRepayments, newRepayment],
       status: nextStatus,
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (addedInterest > 0) {
+      const newInterest = {
+        id: genId(),
+        amount: addedInterest,
+        date: input.date,
+        note: input.interestNote?.trim() ? input.interestNote.trim() : null,
+      };
+      debtUpdate.interestEntries = [...existingInterests, newInterest];
+    }
+    trx.update(debtRef, debtUpdate);
 
     trx.set(txRef, {
       userId,
@@ -596,8 +727,18 @@ export async function addDebtRepayment(
     const counterparty = String(debtData.counterparty ?? 'Người vay');
     const principal = Number(debtData.principal ?? 0) || 0;
     const reps = Array.isArray(debtData.repayments) ? debtData.repayments : [];
+    const borrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const interests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
     const paid = reps.reduce((s: number, r: any) => s + (Number(r?.amount) || 0), 0);
-    const remaining = Math.max(0, principal - paid);
+    const totalDueNow =
+      principal +
+      borrows.reduce((s: number, b: any) => s + (Number(b?.amount) || 0), 0) +
+      interests.reduce((s: number, i: any) => s + (Number(i?.amount) || 0), 0);
+    const remaining = Math.max(0, totalDueNow - paid);
     const isSettledNow = (debtData.status as DebtStatus) === 'settled';
 
     const isLent = direction === 'lent';
@@ -629,10 +770,10 @@ export async function addDebtRepayment(
 /**
  * Ghi nhận vay/cho vay thêm cho khoản nợ đã tồn tại — atomic:
  *  - Push 1 borrow vào mảng debts.additionalBorrows
- *  - Tạo doc transaction cùng chiều với principal ban đầu (isLoanMovement=true)
- *  - Cập nhật fund balance:
+ *  - lent/borrowed: tạo transaction cùng chiều + cập nhật fund balance
  *      - lent (cho vay thêm) → quỹ -amount (expense)
  *      - borrowed (đi vay thêm) → quỹ +amount (income)
+ *  - installment ('Mua thêm'): KHÔNG tạo transaction, KHÔNG đụng quỹ; fundId có thể null.
  *  - Settle status quay lại 'open' nếu trước đó đã tất toán mà giờ totalBorrowed > paid.
  */
 export async function addDebtBorrow(
@@ -640,14 +781,17 @@ export async function addDebtBorrow(
   debtId: string,
   input: {
     amount: number;
-    fundId: string;
+    /** Optional cho 'installment'. Required cho 'lent'/'borrowed'. */
+    fundId: string | null;
     date: Date;
     note?: string | null;
   },
 ): Promise<void> {
   const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
   const txRef = doc(collection(firestoreInstance, TRANSACTIONS_COLLECTION));
-  const fundRef = doc(firestoreInstance, FUNDS_COLLECTION, input.fundId);
+  const fundRef = input.fundId
+    ? doc(firestoreInstance, FUNDS_COLLECTION, input.fundId)
+    : null;
 
   await runTransaction(firestoreInstance, async (trx) => {
     const debtSnap = await trx.get(debtRef);
@@ -659,13 +803,8 @@ export async function addDebtBorrow(
       throw new Error('Khoản nợ không thuộc về người dùng này');
     }
 
-    const fundSnap = await trx.get(fundRef);
-    if (!fundSnap.exists) {
-      throw new Error('Quỹ không tồn tại');
-    }
-    const currentBalance = (fundSnap.data()?.balance as number) ?? 0;
-
     const direction = (debtData.direction as DebtDirection) ?? 'lent';
+    const isInstallment = direction === 'installment';
     const principal = Number(debtData.principal ?? 0) || 0;
     const existingBorrows = Array.isArray(debtData.additionalBorrows)
       ? debtData.additionalBorrows
@@ -673,11 +812,56 @@ export async function addDebtBorrow(
     const existingRepayments = Array.isArray(debtData.repayments)
       ? debtData.repayments
       : [];
+    const existingInterests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
 
     const amt = Math.round(input.amount);
     if (amt <= 0) {
       throw new Error('Số tiền không hợp lệ');
     }
+
+    const extraBefore = existingBorrows.reduce(
+      (s: number, b: any) => s + (Number(b?.amount) || 0),
+      0,
+    );
+    const totalPaid = existingRepayments.reduce(
+      (s: number, r: any) => s + (Number(r?.amount) || 0),
+      0,
+    );
+    const totalInterest = existingInterests.reduce(
+      (s: number, i: any) => s + (Number(i?.amount) || 0),
+      0,
+    );
+    const nextTotalDue = principal + extraBefore + amt + totalInterest;
+    const nextStatus: DebtStatus =
+      totalPaid >= nextTotalDue ? 'settled' : 'open';
+
+    if (isInstallment) {
+      const newBorrow = {
+        id: genId(),
+        amount: amt,
+        date: input.date,
+        fundId: input.fundId ?? null,
+        note: input.note?.trim() ? input.note.trim() : null,
+        transactionId: null,
+      };
+      trx.update(debtRef, {
+        additionalBorrows: [...existingBorrows, newBorrow],
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
+
+    if (!fundRef) {
+      throw new Error('Vui lòng chọn quỹ');
+    }
+    const fundSnap = await trx.get(fundRef);
+    if (!fundSnap.exists) {
+      throw new Error('Quỹ không tồn tại');
+    }
+    const currentBalance = (fundSnap.data()?.balance as number) ?? 0;
 
     // lent (cho vay thêm) → quỹ phải đủ để trừ.
     if (direction === 'lent' && currentBalance < amt) {
@@ -700,19 +884,6 @@ export async function addDebtBorrow(
       note: input.note?.trim() ? input.note.trim() : null,
       transactionId: txRef.id,
     };
-
-    // Tổng vay mới = principal + tất cả borrows + amt mới
-    const extraBefore = existingBorrows.reduce(
-      (s: number, b: any) => s + (Number(b?.amount) || 0),
-      0,
-    );
-    const totalPaid = existingRepayments.reduce(
-      (s: number, r: any) => s + (Number(r?.amount) || 0),
-      0,
-    );
-    const nextTotalBorrowed = principal + extraBefore + amt;
-    const nextStatus: DebtStatus =
-      totalPaid >= nextTotalBorrowed ? 'settled' : 'open';
 
     trx.update(debtRef, {
       additionalBorrows: [...existingBorrows, newBorrow],
@@ -746,14 +917,25 @@ export async function addDebtBorrow(
     const debtData = debtSnap.data() ?? {};
     const direction = (debtData.direction as DebtDirection) ?? 'lent';
     const counterparty = String(debtData.counterparty ?? 'Đối tác');
-    const isLent = direction === 'lent';
     const amt = Math.round(input.amount);
-    const { totalAfter, byId } = await fetchFundsSummary(userId, [input.fundId]);
-    const fundInfo = byId.get(input.fundId);
+    const amtLabel = formatAmount(amt);
+
+    if (direction === 'installment') {
+      await safePushNotification(userId, {
+        kind: 'transaction_added',
+        title: 'Mua thêm',
+        message: `Đã ghi nhận mua thêm ${amtLabel} với "${counterparty}".`,
+      });
+      return;
+    }
+
+    const isLent = direction === 'lent';
+    const fundIdForSummary = input.fundId as string;
+    const { totalAfter, byId } = await fetchFundsSummary(userId, [fundIdForSummary]);
+    const fundInfo = byId.get(fundIdForSummary);
     const fundName = fundInfo?.name ?? 'Quỹ';
     const fundBalance = fundInfo?.balance ?? 0;
     const delta = isLent ? -amt : amt;
-    const amtLabel = formatAmount(amt);
     const signedDeltaLabel = formatSigned(delta);
     const fundBalLabel = formatAmount(fundBalance);
     const totalLabel = formatAmount(totalAfter);
@@ -771,14 +953,14 @@ export async function addDebtBorrow(
 }
 
 /**
- * Cập nhật ghi chú + ngày của 1 lần vay thêm — đồng bộ với transaction.
- * Không đụng amount/fund.
+ * Cập nhật ghi chú + ngày của 1 lần vay thêm — đồng bộ với transaction nếu có.
+ * `amount` chỉ được phép thay đổi với borrow không có linked transaction (trả góp "Mua thêm").
  */
 export async function updateDebtBorrow(
   userId: string,
   debtId: string,
   borrowId: string,
-  input: { note: string | null; date: Date },
+  input: { amount?: number; note: string | null; date: Date },
 ): Promise<void> {
   const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
   const noteValue = input.note?.trim() ? input.note.trim() : null;
@@ -813,17 +995,61 @@ export async function updateDebtBorrow(
       await trx.get(txRef);
     }
 
+    // Cho phép chỉnh amount chỉ khi không có linked tx (= trả góp "Mua thêm").
+    let nextAmount = Number(target?.amount ?? 0) || 0;
+    if (input.amount !== undefined) {
+      if (linkedTxId) {
+        throw new Error(
+          'Không thể đổi số tiền của lần vay thêm có giao dịch liên kết',
+        );
+      }
+      const amt = Math.round(input.amount);
+      if (amt <= 0) {
+        throw new Error('Số tiền không hợp lệ');
+      }
+      nextAmount = amt;
+    }
+
     const nextBorrows = existingBorrows.slice();
     nextBorrows[targetIndex] = {
       ...target,
+      amount: nextAmount,
       note: noteValue,
       date: input.date,
     };
 
-    trx.update(debtRef, {
+    // Nếu amount đổi → recompute settled status.
+    let nextStatus: DebtStatus | undefined;
+    if (input.amount !== undefined) {
+      const principal = Number(debtData.principal ?? 0) || 0;
+      const interests = Array.isArray(debtData.interestEntries)
+        ? debtData.interestEntries
+        : [];
+      const repays = Array.isArray(debtData.repayments)
+        ? debtData.repayments
+        : [];
+      const totalInterest = interests.reduce(
+        (s: number, i: any) => s + (Number(i?.amount) || 0),
+        0,
+      );
+      const extraTotal = nextBorrows.reduce(
+        (s: number, b: any) => s + (Number(b?.amount) || 0),
+        0,
+      );
+      const totalPaid = repays.reduce(
+        (s: number, r: any) => s + (Number(r?.amount) || 0),
+        0,
+      );
+      const totalDue = principal + extraTotal + totalInterest;
+      nextStatus = totalDue > 0 && totalPaid >= totalDue ? 'settled' : 'open';
+    }
+
+    const debtUpdate: Record<string, unknown> = {
       additionalBorrows: nextBorrows,
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (nextStatus) debtUpdate.status = nextStatus;
+    trx.update(debtRef, debtUpdate);
 
     if (txRef) {
       trx.update(txRef, {
@@ -832,6 +1058,228 @@ export async function updateDebtBorrow(
         updatedAt: serverTimestamp(),
       });
     }
+  });
+}
+
+/**
+ * Ghi nhận 1 khoản lãi thủ công cho khoản nợ — atomic:
+ *  - Push 1 entry vào mảng debts.interestEntries
+ *  - KHÔNG đụng quỹ, KHÔNG tạo transaction
+ *  - Cập nhật status dựa trên tổng cần trả mới (gốc + vay thêm + lãi)
+ */
+export async function addDebtInterest(
+  userId: string,
+  debtId: string,
+  input: {
+    amount: number;
+    date: Date;
+    note?: string | null;
+  },
+): Promise<void> {
+  const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
+
+  await runTransaction(firestoreInstance, async (trx) => {
+    const debtSnap = await trx.get(debtRef);
+    if (!debtSnap.exists) {
+      throw new Error('Khoản nợ không tồn tại');
+    }
+    const debtData = debtSnap.data() ?? {};
+    if (debtData.userId !== userId) {
+      throw new Error('Khoản nợ không thuộc về người dùng này');
+    }
+
+    const amt = Math.round(input.amount);
+    if (amt <= 0) {
+      throw new Error('Số tiền không hợp lệ');
+    }
+
+    const principal = Number(debtData.principal ?? 0) || 0;
+    const existingBorrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const existingInterests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
+    const existingRepayments = Array.isArray(debtData.repayments)
+      ? debtData.repayments
+      : [];
+
+    const extraBorrowed = existingBorrows.reduce(
+      (s: number, b: any) => s + (Number(b?.amount) || 0),
+      0,
+    );
+    const totalInterestBefore = existingInterests.reduce(
+      (s: number, i: any) => s + (Number(i?.amount) || 0),
+      0,
+    );
+    const totalPaid = existingRepayments.reduce(
+      (s: number, r: any) => s + (Number(r?.amount) || 0),
+      0,
+    );
+    const nextTotalDue = principal + extraBorrowed + totalInterestBefore + amt;
+    const nextStatus: DebtStatus =
+      nextTotalDue > 0 && totalPaid >= nextTotalDue ? 'settled' : 'open';
+
+    const newInterest = {
+      id: genId(),
+      amount: amt,
+      date: input.date,
+      note: input.note?.trim() ? input.note.trim() : null,
+    };
+
+    trx.update(debtRef, {
+      interestEntries: [...existingInterests, newInterest],
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+
+  // Push notification (best-effort).
+  try {
+    const debtSnap = await getDoc(debtRef);
+    const debtData = debtSnap.data() ?? {};
+    const counterparty = String(debtData.counterparty ?? 'Đối tác');
+    const amt = Math.round(input.amount);
+    await safePushNotification(userId, {
+      kind: 'transaction_added',
+      title: 'Ghi nhận lãi',
+      message: `Đã cộng ${formatAmount(amt)} tiền lãi vào khoản nợ với "${counterparty}".`,
+    });
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Cập nhật ghi chú + ngày + amount của 1 khoản lãi — atomic.
+ * Có thể đổi cả amount vì lãi không ảnh hưởng quỹ.
+ */
+export async function updateDebtInterest(
+  userId: string,
+  debtId: string,
+  interestId: string,
+  input: { amount: number; note: string | null; date: Date },
+): Promise<void> {
+  const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
+  const noteValue = input.note?.trim() ? input.note.trim() : null;
+
+  await runTransaction(firestoreInstance, async (trx) => {
+    const debtSnap = await trx.get(debtRef);
+    if (!debtSnap.exists) {
+      throw new Error('Khoản nợ không tồn tại');
+    }
+    const debtData = debtSnap.data() ?? {};
+    if (debtData.userId !== userId) {
+      throw new Error('Khoản nợ không thuộc về người dùng này');
+    }
+
+    const existingInterests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
+    const targetIndex = existingInterests.findIndex(
+      (i: any) => String(i?.id ?? '') === interestId,
+    );
+    if (targetIndex < 0) {
+      throw new Error('Không tìm thấy khoản lãi này');
+    }
+
+    const amt = Math.round(input.amount);
+    if (amt <= 0) {
+      throw new Error('Số tiền không hợp lệ');
+    }
+
+    const target = existingInterests[targetIndex];
+    const nextInterests = existingInterests.slice();
+    nextInterests[targetIndex] = {
+      ...target,
+      amount: amt,
+      note: noteValue,
+      date: input.date,
+    };
+
+    const principal = Number(debtData.principal ?? 0) || 0;
+    const borrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const repays = Array.isArray(debtData.repayments) ? debtData.repayments : [];
+    const totalInterestNew = nextInterests.reduce(
+      (s: number, i: any) => s + (Number(i?.amount) || 0),
+      0,
+    );
+    const totalDue =
+      principal +
+      borrows.reduce((s: number, b: any) => s + (Number(b?.amount) || 0), 0) +
+      totalInterestNew;
+    const totalPaid = repays.reduce(
+      (s: number, r: any) => s + (Number(r?.amount) || 0),
+      0,
+    );
+    const nextStatus: DebtStatus =
+      totalDue > 0 && totalPaid >= totalDue ? 'settled' : 'open';
+
+    trx.update(debtRef, {
+      interestEntries: nextInterests,
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
+  });
+}
+
+/**
+ * Xóa 1 khoản lãi — atomic. Không đụng quỹ. Cập nhật status nếu cần.
+ */
+export async function deleteDebtInterest(
+  userId: string,
+  debtId: string,
+  interestId: string,
+): Promise<void> {
+  const debtRef = doc(firestoreInstance, DEBTS_COLLECTION, debtId);
+
+  await runTransaction(firestoreInstance, async (trx) => {
+    const debtSnap = await trx.get(debtRef);
+    if (!debtSnap.exists) {
+      throw new Error('Khoản nợ không tồn tại');
+    }
+    const debtData = debtSnap.data() ?? {};
+    if (debtData.userId !== userId) {
+      throw new Error('Khoản nợ không thuộc về người dùng này');
+    }
+
+    const existingInterests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
+    const nextInterests = existingInterests.filter(
+      (i: any) => i?.id !== interestId,
+    );
+    if (nextInterests.length === existingInterests.length) {
+      throw new Error('Không tìm thấy khoản lãi này');
+    }
+
+    const principal = Number(debtData.principal ?? 0) || 0;
+    const borrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const repays = Array.isArray(debtData.repayments) ? debtData.repayments : [];
+    const totalInterestNew = nextInterests.reduce(
+      (s: number, i: any) => s + (Number(i?.amount) || 0),
+      0,
+    );
+    const totalDue =
+      principal +
+      borrows.reduce((s: number, b: any) => s + (Number(b?.amount) || 0), 0) +
+      totalInterestNew;
+    const totalPaid = repays.reduce(
+      (s: number, r: any) => s + (Number(r?.amount) || 0),
+      0,
+    );
+    const nextStatus: DebtStatus =
+      totalDue > 0 && totalPaid >= totalDue ? 'settled' : 'open';
+
+    trx.update(debtRef, {
+      interestEntries: nextInterests,
+      status: nextStatus,
+      updatedAt: serverTimestamp(),
+    });
   });
 }
 
@@ -882,6 +1330,44 @@ export async function deleteDebtBorrow(
     const txId = target.transactionId as string | undefined;
     const direction = (debtData.direction as DebtDirection) ?? 'lent';
     const isLent = direction === 'lent';
+    const isInstallment = direction === 'installment';
+
+    // Recompute totals + status (chia sẻ giữa cả 2 path).
+    const computeStatus = () => {
+      const nextBorrows = existing.filter((b: any) => b?.id !== borrowId);
+      const principal = Number(debtData.principal ?? 0) || 0;
+      const extraTotal = nextBorrows.reduce(
+        (s: number, b: any) => s + (Number(b?.amount) || 0),
+        0,
+      );
+      const interests = Array.isArray(debtData.interestEntries)
+        ? debtData.interestEntries
+        : [];
+      const totalInterest = interests.reduce(
+        (s: number, i: any) => s + (Number(i?.amount) || 0),
+        0,
+      );
+      const totalDue = principal + extraTotal + totalInterest;
+      const repays = Array.isArray(debtData.repayments) ? debtData.repayments : [];
+      const totalPaid = repays.reduce(
+        (s: number, r: any) => s + (Number(r?.amount) || 0),
+        0,
+      );
+      const nextStatus: DebtStatus =
+        totalDue > 0 && totalPaid >= totalDue ? 'settled' : 'open';
+      return { nextBorrows, nextStatus };
+    };
+
+    if (isInstallment) {
+      // Trả góp: không đụng quỹ, không có tx liên kết. Chỉ remove borrow.
+      const { nextBorrows, nextStatus } = computeStatus();
+      trx.update(debtRef, {
+        additionalBorrows: nextBorrows,
+        status: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      return;
+    }
 
     const primaryFundId = opts?.refundFundId || originalFundId;
     if (!primaryFundId) {
@@ -963,21 +1449,7 @@ export async function deleteDebtBorrow(
     }
 
     // Update debt array + status.
-    const nextBorrows = existing.filter((b: any) => b?.id !== borrowId);
-    const principal = Number(debtData.principal ?? 0) || 0;
-    const extraTotal = nextBorrows.reduce(
-      (s: number, b: any) => s + (Number(b?.amount) || 0),
-      0,
-    );
-    const totalBorrowed = principal + extraTotal;
-    const repays = Array.isArray(debtData.repayments) ? debtData.repayments : [];
-    const totalPaid = repays.reduce(
-      (s: number, r: any) => s + (Number(r?.amount) || 0),
-      0,
-    );
-    const nextStatus: DebtStatus =
-      totalBorrowed > 0 && totalPaid >= totalBorrowed ? 'settled' : 'open';
-
+    const { nextBorrows, nextStatus } = computeStatus();
     trx.update(debtRef, {
       additionalBorrows: nextBorrows,
       status: nextStatus,
@@ -1159,8 +1631,18 @@ export async function deleteDebtRepayment(
       0,
     );
     const principal = Number(debtData.principal ?? 0) || 0;
+    const borrows = Array.isArray(debtData.additionalBorrows)
+      ? debtData.additionalBorrows
+      : [];
+    const interests = Array.isArray(debtData.interestEntries)
+      ? debtData.interestEntries
+      : [];
+    const totalDue =
+      principal +
+      borrows.reduce((s: number, b: any) => s + (Number(b?.amount) || 0), 0) +
+      interests.reduce((s: number, i: any) => s + (Number(i?.amount) || 0), 0);
     const nextStatus: DebtStatus =
-      totalPaid >= principal && principal > 0 ? 'settled' : 'open';
+      totalDue > 0 && totalPaid >= totalDue ? 'settled' : 'open';
 
     trx.update(debtRef, {
       repayments: nextRepayments,
@@ -1252,6 +1734,9 @@ export async function deleteDebt(
   const existingBorrows = Array.isArray(data.additionalBorrows)
     ? data.additionalBorrows
     : [];
+  const existingInterests = Array.isArray(data.interestEntries)
+    ? data.interestEntries
+    : [];
   const totalPaid = existingRepayments.reduce(
     (s: number, r: any) => s + (Number(r?.amount) || 0),
     0,
@@ -1260,10 +1745,15 @@ export async function deleteDebt(
     (s: number, b: any) => s + (Number(b?.amount) || 0),
     0,
   );
-  // Tổng vay = gốc + các lần vay thêm; phần còn lại = tổng vay − đã trả.
-  const totalBorrowed = principal + totalExtraBorrowed;
-  const remaining = Math.max(0, totalBorrowed - totalPaid);
+  const totalInterest = existingInterests.reduce(
+    (s: number, i: any) => s + (Number(i?.amount) || 0),
+    0,
+  );
+  // Tổng cần trả = gốc + các lần vay thêm + lãi; còn lại = tổng cần trả − đã trả.
+  const totalDue = principal + totalExtraBorrowed + totalInterest;
+  const remaining = Math.max(0, totalDue - totalPaid);
   const isLent = direction === 'lent';
+  const isInstallment = direction === 'installment';
 
   // Lấy tất cả transaction liên kết (pre-fetch outside trx).
   const txQ = query(
@@ -1276,8 +1766,9 @@ export async function deleteDebt(
   );
 
   await runTransaction(firestoreInstance, async (trx) => {
-    // Nếu còn remaining > 0 → cần áp dụng delta lên quỹ user chọn.
-    if (remaining > 0) {
+    // Trả góp: không đụng quỹ bất kể remaining. Chỉ xóa debt + tx (nếu có).
+    // Nếu còn remaining > 0 và không phải installment → áp dụng delta lên quỹ user chọn.
+    if (remaining > 0 && !isInstallment) {
       const refundFundId = opts?.refundFundId;
       if (!refundFundId) {
         throw new Error('Chưa chọn quỹ để hoàn tác');
@@ -1355,6 +1846,14 @@ export async function deleteDebt(
   // Push notification (best-effort)
   try {
     const counterparty = String(data.counterparty ?? '');
+    if (isInstallment) {
+      await safePushNotification(userId, {
+        kind: 'transaction_deleted',
+        title: 'Xóa khoản trả góp',
+        message: `Đã xóa khoản trả góp với "${counterparty}". Số dư các quỹ không đổi.`,
+      });
+      return;
+    }
     if (remaining > 0 && opts?.refundFundId) {
       const { totalAfter, byId } = await fetchFundsSummary(
         userId,

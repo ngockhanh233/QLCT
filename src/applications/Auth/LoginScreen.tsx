@@ -43,7 +43,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess }) => {
 
   useEffect(() => {
     GoogleSignin.configure({
-      webClientId: '694988244061-eal0hgrkrbuk6fi66gtto2cb96ul59h3.apps.googleusercontent.com',
+      webClientId: '694988244061-ciqpp9s030j9iag6ghoaqg5agqkltghc.apps.googleusercontent.com',
       offlineAccess: true,
     });
   }, []);
